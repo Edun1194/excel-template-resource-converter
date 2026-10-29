@@ -105,3 +105,10 @@ python3 scripts/convert_vendor_quote.py \
 - **图片按 anchor 行号取,行号是 0-idx** —— 数据行号 r(1-idx) → anchor r-1
 
 更多见 `SKILL.md` 的「Generic Bug Patterns」和 `references/patterns/`。
+
+## License
+
+[Apache License 2.0](LICENSE) —— Copyright 2026 Edun
+
+允许商用、修改、再分发;使用者需保留版权与许可声明,需注明修改,并享有显式专利授权。
+
