@@ -1,0 +1,16 @@
+# 核心依赖(必需)
+pandas>=2.0.0
+openpyxl>=3.1.0
+pillow>=10.0.0
+PyYAML>=6.0          # cplus_resolver.py 用 yaml.safe_load 读规则文件
+
+# 老式 .xls 源文件(仅 A1001 / V1041 等需要时安装)
+xlrd>=2.0.1
+
+# PDF 源文件(仅 vendor_pdf_vendor.py / preprocess_mcqueen_pdf.py 需要时安装)
+pdfplumber
+PyMuPDF
+
+# 已移除(2026-07-19 审计):
+# - python-docx: V1049 原来读 MARKUP POMPEU.docx,C+ 改由用户输入后不再需要
+# - xlrd 默认装:源文件已大部分 .xlsx 化,只在确实读 .xls 时再装

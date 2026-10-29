@@ -1,0 +1,102 @@
+# 期货通道(Futures Channel)
+
+> 适用:供应商给的**期货 / 订货单**——还没有真实库存,数量列要留空等客户填。
+
+## 什么是「期货通道」
+
+期货单和现货单走**同一个解析器**,区别只在两处输出约定:
+
+| | 现货通道 | 期货通道 |
+|---|---|---|
+| 数量列 | 从源文件读真实库存 | **留空**(等客户填) |
+| 「云仓」列 | 工厂代号(如 `V1061`) | 工厂代号(`V1004-期货` → `V1004`)**或**品牌占位(`category-futures` → `品牌名称（期货）`) |
+
+「云仓」列映射的是 `row["vendor_id"]`,见 `convert_vendor_quote_shared/__init__.py` 的 `map_row_to_template`。
+
+### 已注册的期货通道
+
+| Vendor ID | 适配器 | 说明 |
+|---|---|---|
+| `V1003-期货` | `vendor_v1003_futures.py` | 期货系总入口:McQueen SS27 + Armani PLM Report + LONGCHAMP SS27。输出 `vendor_id` 统一 `V1003` |
+| `V1004-期货` | `vendor_v1004_futures.py` | SALOMON Foglio 版式数量留空;现货 4 品牌(ARC'TERYX / PATAGONIA / PRL / STONE ISLAND)委托 `vendor_v1004.parse_rows`,数量照旧 |
+| `V1070-期货` | `vendor_v1070_nuorder.py` | BC NuORDER SS27/SS28 |
+| `V1072-期货` | `vendor_v1072_in_arrivo.py` | LISTE FW26 IN ARRIVO 8 个品牌 |
+| `category-futures` | `vendor_category_futures.py` | 聚合通道:一个适配器覆盖多品牌多版式,「云仓」写 `品牌名称（期货）` |
+
+## category-futures:6 种版式(2026-10-27)
+
+一个适配器覆盖 6 个品牌、6 种完全不同的表结构,按文件特征自动路由。
+实现见 `scripts/category_futures/`。
+
+**铁律:一律按表头名定位列,绝不写死列号。**
+同一份 NuORDER,ACNE / BC / Men ss27 / POLO RL 四家的列序都不一样(19 / 21 / 55 / 29 列)。
+
+| 模块 | 版式 | 表头特征(SIGNATURE) | 尺码/数量 |
+|---|---|---|---|
+| `linesheet.py` | LEMAIRE / Alexander Wang / GANNI | `Style Number` + `Available Sizes` + `Style Image` | 尺码在 **'Available Sizes' 文本列**,按逗号拆行;数量留空 |
+| `nuorder.py` | ACNE / BC / Men ss27 / POLO RL | sheet 名含 `NuORDER` + `Season`+`Style Number`+`Wholesale` | 每行一个尺码 |
+| `boss.py` | BOSS | `Style No.` + `WHS` + `SKU` | 尺码是**列**,数量在同一行同列 |
+| `salomon.py` | SALOMON | `Article code` + `Color` + `WHLS` | sheet `FTW`,R1 表头但 c14+ 是尺码换算表;尺码区全空 → 一行/货号,数量取 `Unit total` |
+| `longchamp.py` | LONGCHAMP | `Code Style` + `Tarif Gros` + `Qté` | sheet `QTE BDC`,尺码在固定字段区之后(c34);数量 `Qté` 空则取 `Qty`;**该文件无行级图片** |
+| `vw.py` | VIVIENNE WESTWOOD | `Generic Prod Code` + `Available Qty` + `WHL` | sheet `Foglio1`,每行一个尺码;`Prod Brand` 是内部码不是品牌名;`Product Image` 是 `#VALUE!` 无图 |
+
+### 通用规律(反复验证)
+
+1. **按表头名定位列**,别名表要覆盖变体列:
+   `'Wholesale (EUR)'` → 归一化后 `wholesaleeur`,所以别名要同时写
+   `("Wholesale (EUR)", "Wholesale (USD)", "Wholesale Price (EUR)", "Wholesale Price", "Wholesale")`。
+   归一化会**去括号**:去括号后才能对上 `'Wholesale (EUR)'`。
+2. **detect 的表头特征必须同时含全部关键词**才算命中。
+   宽松匹配会让 Linesheet 和 NuORDER 互相误判——两者都有 `Style Number`。
+3. **尺码区起点 = 最后一个已映射固定字段列 + 1**。
+   否则 `Name` 这种 4 字母词会被误判成尺码。
+4. **数量列 = 尺码列右边最近的表头含 `Qty` 且不含 `size price` 的列**;没有就留空。
+
+## openpyxl 读不了的 xlsx(2 个已知)
+
+| 文件 | 报错 | 原因 |
+|---|---|---|
+| Alexander Wang | `TypeError` | `<sheetProtection insertLinks="1">` |
+| LONGCHAMP | `ValueError` | `<dataValidation type=非法值>` |
+
+**解法**:`category_futures/common.py` 的 `open_safe_workbook()` —— 复制一份临时文件,
+把 `<sheetProtection>` / `<dataValidations>` 标签摘掉再 load;还不行退回 `read_only` 模式
+(read_only 能读单元格值,但拿不到 `ws._images`,图片再走 zip 解析)。
+
+```python
+from category_futures.common import open_safe_workbook
+
+wb = open_safe_workbook(path)   # 别直接 openpyxl.load_workbook
+```
+
+## 数量列留空的正确姿势
+
+期货单**没有真实库存**,不要从源文件里硬凑一个数出来:
+
+```python
+rows.append({
+    ...
+    "quantity": None,      # 留空,等客户填
+    "vendor_id": vendor_id,
+})
+```
+
+⚠️ 不要填 `0`。`0` 在模板里表示「确实没有库存」,语义和「还没填」不同。
+
+## 「云仓」列写法
+
+```python
+# V1004-期货 → 写 "V1004"(不带 "-期货" 后缀)
+rows[i]["vendor_id"] = "V1004"
+
+# category-futures → 写固定占位
+rows[i]["vendor_id"] = "品牌名称（期货）"   # 见 vendor_category_futures.CATEGORY_FUTURES_WAREHOUSE
+```
+
+## 自检清单
+
+- [ ] 数量列**整列为空**(不是 0)
+- [ ] 「云仓」列 = 工厂代号 / `品牌名称（期货）`
+- [ ] 尺码已展开成多行(一行一个尺码)
+- [ ] 图片数与源文件一致(没有的版式如 LONGCHAMP/VW 确实就是 0)
+- [ ] detect 没有误判(同一份文件只命中一个版式)

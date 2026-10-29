@@ -1,0 +1,24 @@
+# macOS
+.DS_Store
+._*
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 本地测试数据(体积大且是客户数据,不进仓库)
+testdata/
+*.xlsx.bak
+
+# 转换产物
+converted/
+output/
+outputs/*.xlsx
+
+# 本地配置
+.env
+.env.*
+*.local.yml
