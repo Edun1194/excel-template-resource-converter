@@ -1,10 +1,17 @@
-"""V0000 placeholder vendor for MOORER (MooRer) 现货单。
+"""V0000 placeholder vendor —— 多品牌占位通道 (MOORER / GUCCI STOCKLIST / HERNO)。
 
 来源: MooRer R-75 special list.xlsx (MOORER 意大利高端外套品牌, 2026-09-15)
       + Moorer R-75 Special list-update 1809 (2).xlsx (2026-09-19, 列顺序有变化)
+      + GUCCI STOCKLIST 220926 (2026-09-23, section 版式)
+      + HERNO FW 29-10.xlsx (2026-10-30, 单表头 + 尺码数量矩阵)
 仓库 ID 临时用 V0000 (尚未分配正式 vendor code)
 
-结构 (单 sheet "FILE", 2026-09-19 版 860 行 61 列 / R-75 版 777 行 59 列):
+**这是个占位通道**: 三家品牌版式完全不同, 按文件特征自动分流 ——
+  GUCCI STOCKLIST → 表头含 "ARTICLE_COLOR"
+  HERNO          → 表头行含 "SKU" + "BRAND" (实现见 vendor_v0000_herno.py)
+  MOORER         → 其余 (中文表头 R1)
+
+结构 (MOORER 单 sheet "FILE", 2026-09-19 版 860 行 61 列 / R-75 版 777 行 59 列):
   R1 header (中文): 性别 | 类目 | 描述 | 颜色 | 图片 | 国际编码 | Size grid
                    | 欧洲零售价 | 供货价 | 26 | 27 | 28 | ... | M | L | XL | UNI | 总数
   注: R-75 版列顺序是 性别 | 类目 | 图片 | 描述 | 颜色 | 国际编码 | ... (图片在 col 3)
@@ -137,6 +144,11 @@ def parse_rows(
       - col 6 ARTICLE_COLOR 是 SKU (article + "_" + color_code)
       - col 11 U = 单 size 库存
       - col 9 RETAIL PRICE, col 10 COST PRICE
+
+    2026-10-30 加 HERNO 版式适配 (实现见 vendor_v0000_herno.py):
+      - 表头行含 "SKU" + "BRAND" → HERNO 路径
+      - 单 sheet 'Worksheet', R2 表头, 尺码矩阵在最后一段(c16-c33)
+      - 源文件没有 cost / 供货价 / 色号列 → 那三列留空
     """
     wb = openpyxl.load_workbook(primary_file, data_only=True)
     ws = wb.active
@@ -149,7 +161,22 @@ def parse_rows(
             break
     if is_gucci:
         return _parse_gucci_stocklist(ws, vendor_id, season)
+
+    # HERNO: 表头行含 SKU + BRAND (表头固定 R2, 上方可能压着一行残留值)
+    if _looks_like_herno(ws):
+        from vendor_v0000_herno import parse_rows as _herno_parse
+        return _herno_parse(primary_file, None, vendor_id)
+
     return _parse_moorer(ws, vendor_id, season)
+
+
+def _looks_like_herno(ws) -> bool:
+    """是不是 HERNO 版式(表头行同时含 'SKU' 和 'BRAND')。"""
+    try:
+        from vendor_v0000_herno import looks_like_herno
+        return looks_like_herno(ws)
+    except Exception:
+        return False
 
 
 def _parse_gucci_stocklist(ws, vendor_id: str, season: str) -> List[Dict[str, object]]:

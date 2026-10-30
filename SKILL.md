@@ -482,7 +482,7 @@ def get_vendor_meta() -> Dict[str, object]:
 | `XLS-to-XLSX-image-analysis-2026-07-10.md` | XLS→XLSX 图片结构分析 |
 | `generic-multi-section-xls-debugging.md` | 多 section xls 调试 |
 
-**品牌专属笔记** (`references/vendors/`): `V0000-MOORER-notes.md`、`V1042-POLO-RALPH-LAUREN-notes.md`。
+**品牌专属笔记** (`references/vendors/`): `V0000-notes.md`(MOORER / GUCCI STOCKLIST / HERNO 三版式)、`V1042-POLO-RALPH-LAUREN-notes.md`。
 其余品牌专属列偏移**故意不放**(2026-07-15 决定),按需现场分析。
 
 ## 环境变量
