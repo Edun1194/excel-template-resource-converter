@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import hashlib
 import math
-import os
 import re
 import uuid
 from collections import defaultdict
@@ -148,29 +147,10 @@ def parse_cplus(rule: object) -> Optional[float]:
 
 
 # ---------------------------------------------------------------------------
-# C+ lookup — 通用方法:从「品牌对应C+.xlsx」读 brand→C+ 映射
-#
-# 查找顺序:
-#   1. 显式传入的 cplus_file
-#   2. 环境变量 CPLUS_BRAND_MAP 指向的 xlsx
-#   3. 历史本地路径 ~/Desktop/表格处理/6.29/品牌对应C+.xlsx(存在才用,不存在不报错)
-#
-# ⚠️ C+ 政策(2026-10-28 用户确认):C+ 是**每单单独给**的,
-#    不要把某个值当品牌默认值/兜底自动套用。找不到就返回 None(留空)。
+# C+ lookup — 通用方法:从 ~/Desktop/表格处理/6.29/品牌对应C+.xlsx 读 brand→C+ 映射
 # ---------------------------------------------------------------------------
 
 _CPLUS_LOOKUP: Optional[Dict[str, str]] = None
-
-CPLUS_BRAND_MAP_ENV = "CPLUS_BRAND_MAP"
-
-
-def _default_cplus_file() -> Optional[Path]:
-    """定位「品牌对应C+.xlsx」:环境变量优先,其次历史本地路径(都没有 → None)。"""
-    env_path = os.environ.get(CPLUS_BRAND_MAP_ENV)
-    if env_path:
-        return Path(env_path).expanduser()
-    legacy = Path.home() / "Desktop/表格处理/6.29/品牌对应C+.xlsx"
-    return legacy if legacy.exists() else None
 
 
 def _load_cplus_lookup(cplus_file: Optional[Path] = None) -> Dict[str, str]:
@@ -180,9 +160,7 @@ def _load_cplus_lookup(cplus_file: Optional[Path] = None) -> Dict[str, str]:
     返回:dict 键是品牌名 upper-case,值是原文本
     """
     if cplus_file is None:
-        cplus_file = _default_cplus_file()
-    if cplus_file is None:
-        return {}
+        cplus_file = Path.home() / "Desktop/表格处理/6.29/品牌对应C+.xlsx"
     cplus_file = Path(cplus_file)
     if not cplus_file.exists():
         return {}
@@ -197,16 +175,11 @@ def _load_cplus_lookup(cplus_file: Optional[Path] = None) -> Dict[str, str]:
     return lookup
 
 
-def get_cplus_pct(
-    brand: str,
-    cplus_file: Optional[Path] = None,
-    fallback: Optional[float] = None,
-) -> Optional[float]:
-    """Return C+ percentage as float for the given brand (e.g. 0.18), or None.
+def get_cplus_pct(brand: str, cplus_file: Optional[Path] = None, fallback: float = 0.18) -> float:
+    """Return C+ percentage as float for the given brand (e.g. 0.18).
 
-    从「品牌对应C+.xlsx」读 C+ 文本,parse 出数字百分比。
-    fallback: 找不到时的返回值。**默认 None = 不套用任何默认加价率**
-    (C+ 按单给,见模块头注释)。
+    从 品牌对应C+.xlsx 读 C+ 文本,parse 出数字百分比。
+    fallback: 找不到时返回的默认值(各品牌应传自己的,如 FENDI=0.18, GUCCI=0.23, MIU MIU=0.26)
     """
     global _CPLUS_LOOKUP
     if _CPLUS_LOOKUP is None:
@@ -214,23 +187,12 @@ def get_cplus_pct(
     key = brand.strip().upper()
     text = _CPLUS_LOOKUP.get(key, "")
     m = re.search(r'C\+(\d+)%', text, re.IGNORECASE)
-    if m:
-        return int(m.group(1)) / 100.0
-    return fallback
+    return int(m.group(1)) / 100.0 if m else fallback
 
 
-def get_cplus_int(
-    brand: str,
-    cplus_file: Optional[Path] = None,
-    fallback: Optional[float] = None,
-) -> Optional[int]:
-    """Return C+ as integer (e.g. 18) — 模板 C+- 列用纯整数,正数/负数/无 C+ 留空。
-
-    找不到 C+ 数据时返回 None(留空),不填 0,也不套用默认加价率。
-    """
+def get_cplus_int(brand: str, cplus_file: Optional[Path] = None, fallback: float = 0.18) -> int:
+    """Return C+ as integer (e.g. 18) — 模板 C+- 列用纯整数,正数/负数/无 C+ 留空。"""
     pct = get_cplus_pct(brand, cplus_file, fallback)
-    if pct is None:
-        return None
     return int(round(pct * 100))
 
 
@@ -1008,6 +970,140 @@ def has_richvalue_images(primary_file: Path) -> bool:
         return "xl/richData/richValueRel.xml" in z.namelist()
     except Exception:
         return False
+
+
+def load_richvalue_images_by_col(
+    primary_file: Path, col_letter: str
+) -> Dict[int, List[Dict[str, object]]]:
+    """Excel 365 richValue 图片 —— **按指定列**取 cell.vm, 且兼容两种 rv 结构。
+
+    与 ``load_richvalue_images`` 的区别(那个函数写死 E 列 + 只认"恰好 2 个 <v>"的 rv):
+      1. **列不写死** —— 本函数按 ``col_letter`` 取(POLO RL ATS 的图片在 B 列)
+      2. **按结构定义解析字段** —— 读 ``xl/richData/rdrichvaluestructure.xml``,
+         认识两种结构:
+           ``_webimage``   字段: WebImageIdentifier / CalcOrigin / ComputedImage
+                                / ImageSizing / Text
+           ``_localImage`` 字段: _rvRel:LocalImageIdentifier / CalcOrigin [/ Text]
+
+    链路:
+      cell vm=N → ``rdrichvalue.xml`` 第 N 个 ``<rv>``(vm 是 1-idx, rv 是 0-idx)
+        - _webimage   → WebImageIdentifier → ``rdRichValueWebImage.xml`` 的
+                        ``webImageSrd`` 序号 → ``<blip r:id="rIdX"/>``
+                        → ``rdRichValueWebImage.xml.rels`` → ``xl/media/imageN.jpeg``
+        - _localImage → _rvRel:LocalImageIdentifier → ``richValueRel.xml`` 的
+                        ``<rel>`` 序号 → rIdX → ``richValueRel.xml.rels``
+                        → ``xl/media/imageN.png``
+
+    Returns: {row_1idx -> [{bytes, format}]}
+    """
+    out: Dict[int, List[Dict[str, object]]] = {}
+    if not str(primary_file).lower().endswith(".xlsx"):
+        return out
+    try:
+        z = __import__("zipfile").ZipFile(primary_file, "r")
+    except Exception:
+        return out
+    names = z.namelist()
+    if "xl/richData/rdrichvalue.xml" not in names:
+        return out
+
+    import re as _re
+
+    try:
+        sheet_xml = z.read("xl/worksheets/sheet1.xml").decode("utf-8", "ignore")
+        rd_xml = z.read("xl/richData/rdrichvalue.xml").decode("utf-8", "ignore")
+    except KeyError:
+        return out
+
+    # 1) 指定列的 cell → vm (1-idx row)
+    vm_by_row: Dict[int, int] = {}
+    pat = r'<c r="%s(\d+)"[^>]*?vm="(\d+)"' % _re.escape(col_letter.upper())
+    for m in _re.finditer(pat, sheet_xml):
+        vm_by_row[int(m.group(1))] = int(m.group(2))
+    if not vm_by_row:
+        return out
+
+    # 2) 结构定义: s 序号 → 字段名列表
+    struct_keys: List[List[str]] = []
+    if "xl/richData/rdrichvaluestructure.xml" in names:
+        try:
+            st_xml = z.read("xl/richData/rdrichvaluestructure.xml").decode("utf-8", "ignore")
+        except KeyError:
+            st_xml = ""
+        for s_blk in _re.findall(r"<s\b[^>]*>(.*?)</s>", st_xml, _re.S):
+            struct_keys.append(_re.findall(r'<k n="([^"]+)"', s_blk))
+
+    # 3) rv 列表: (s 序号, 字段值列表)
+    rvs: List[Tuple[int, List[str]]] = []
+    for s_idx, body in _re.findall(r'<rv\s+s="(\d+)"\s*>(.*?)</rv>', rd_xml, _re.S):
+        rvs.append((int(s_idx), _re.findall(r"<v>([^<]*)</v>", body)))
+
+    # 4) 两条 rel 链
+    web_blip: List[Optional[str]] = []
+    if "xl/richData/rdRichValueWebImage.xml" in names:
+        try:
+            wi_xml = z.read("xl/richData/rdRichValueWebImage.xml").decode("utf-8", "ignore")
+        except KeyError:
+            wi_xml = ""
+        for blk in _re.findall(r"<webImageSrd>(.*?)</webImageSrd>", wi_xml, _re.S):
+            m = _re.search(r'<blip r:id="(rId\d+)"', blk)
+            web_blip.append(m.group(1) if m else None)
+
+    local_rel: List[str] = []
+    if "xl/richData/richValueRel.xml" in names:
+        try:
+            rr_xml = z.read("xl/richData/richValueRel.xml").decode("utf-8", "ignore")
+        except KeyError:
+            rr_xml = ""
+        local_rel = _re.findall(r'<rel r:id="(rId\d+)"\s*/>', rr_xml)
+
+    def _rid_targets(rels_name: str) -> Dict[str, str]:
+        if rels_name not in names:
+            return {}
+        try:
+            xml = z.read(rels_name).decode("utf-8", "ignore")
+        except KeyError:
+            return {}
+        return {
+            m.group(1): m.group(2)
+            for m in _re.finditer(
+                r'<Relationship Id="(rId\d+)"[^>]*Target="\.\./(media/[^"]+)"', xml
+            )
+        }
+
+    web_targets = _rid_targets("xl/richData/_rels/rdRichValueWebImage.xml.rels")
+    local_targets = _rid_targets("xl/richData/_rels/richValueRel.xml.rels")
+
+    for row_1idx, vm in vm_by_row.items():
+        rv_idx = vm - 1                      # vm 是 1-idx, rv 列表是 0-idx
+        if not (0 <= rv_idx < len(rvs)):
+            continue
+        s_idx, values = rvs[rv_idx]
+        keys = struct_keys[s_idx] if 0 <= s_idx < len(struct_keys) else []
+
+        target: Optional[str] = None
+        if "WebImageIdentifier" in keys:
+            k = keys.index("WebImageIdentifier")
+            if k < len(values):
+                wi_id = int(values[k] or -1)
+                if 0 <= wi_id < len(web_blip) and web_blip[wi_id]:
+                    target = web_targets.get(web_blip[wi_id])
+        elif "_rvRel:LocalImageIdentifier" in keys:
+            k = keys.index("_rvRel:LocalImageIdentifier")
+            if k < len(values):
+                li = int(values[k] or -1)
+                if 0 <= li < len(local_rel):
+                    target = local_targets.get(local_rel[li])
+        if not target:
+            continue
+
+        try:
+            data = z.read(f"xl/{target}")
+        except KeyError:
+            continue
+        fmt = "png" if target.lower().endswith(".png") else "jpeg"
+        out.setdefault(row_1idx, []).append({"bytes": data, "format": fmt})
+    return out
 
 
 def load_images_by_row_per_sheet(primary_file: Path) -> Dict[str, Dict[int, List[Dict[str, object]]]]:

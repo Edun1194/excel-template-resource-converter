@@ -440,7 +440,7 @@ def parse_rows(
 ) -> List[Dict[str, object]]:
     """解析 V1007 (GANNI) 货单 PDF。
 
-    强制把 vendor_id 改成 V1007,保证输出「云仓」列稳定是 V1007。
+    强制把 vendor_id 改成 V1007,保证输出 仓库ID 列稳定是 V1007。
     """
     rows: List[Dict[str, object]] = []
     if not primary_file.exists():

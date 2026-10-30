@@ -25,7 +25,7 @@
   品牌       ← "" 留空(main 走文件名兜底 → "CALVIN KLEIN")
   性别       ← c14 Gender:Men→"Man" / Women→"Woman" / 其他→原文
   类目       ← c17 Sub Category (e.g. "Underwear Bottoms Multi")
-  云仓        ← VENDOR_ID = "V_CK"
+  仓库ID     ← VENDOR_ID = "V_CK"
   图         ← 跨 sheet 匹配:STOCK c3 (Generic Article) → Images c2 → drawing1.xml 拿 bytes
 
 图片匹配流程:

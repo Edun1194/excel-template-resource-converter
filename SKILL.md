@@ -208,7 +208,7 @@ template-resource-converter/
 | `V1046` | `vendor_v1046.py` | LOSCHI |
 | `V1048` | `vendor_v1048.py` | MALTEMPI |
 | `V1049` | `vendor_v1049.py` | POMPEU |
-| `V1050` | `vendor_v1050.py` | FOLLIFOLLIE |
+| `V1050` | `vendor_v1050.py` | FOLLIFOLLIE + POLO RALPH LAUREN ATS(`MATERIAL NUMBER` 版式, richValue 图, 尺码行共享图) |
 | `V1061` | `vendor_v1061.py` | GUCCI FW26 - WAREHOUSE B(平铺) |
 | `V1062` | `vendor_v1062.py` | GUCCI WAREHOUSE B/C(col14 老单)+ CANADA GOOSE FW26 WAREHOUSE C(平铺) |
 | `V1063` | `vendor_v1063.py` | |

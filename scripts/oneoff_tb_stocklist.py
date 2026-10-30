@@ -18,13 +18,13 @@ One-off converter: Tory Burch "Stock List 4199 08.25_Ita.xlsx"
 
 输出:
   - 1 个 xlsx 文件,内含 5 sheet,1:1 对应源 sheet
-  - 18 列(品牌/图片/货号/描述/类目/材质/性别/颜色/色号/季节/产地/零售价/cost/C+-/批发价/尺码/数量/云仓)
+  - 18 列(品牌/货号/图片/描述/类目/材质/颜色/色号/季节/产地/cost/C+-/供货价/零售价/尺码/库存/仓库ID/性别)
   - 品牌: TORY BURCH (硬编码)
   - 货号: C5 (`<Style Code>-<NRF Color Code>` e.g. "137312-001")
-  - C+: 8 (本次订单用户指定 +8%,纯整数;不是品牌默认值)
-  - 批发价: cost * 1.08
+  - C+: 8 (用户指定 +8%,硬编码)
+  - 供货价: cost * 1.08
   - 性别: WOMAN (Tory Burch 主线)
-  - 云仓: 留空(没有工厂代码)
+  - 仓库 ID: 留空(没有工厂代码)
   - 季节: C11(Seasonality 字段原样输出, e.g. "CO" / "N25")
   - 产地: 空(源文件没产地列)
 
@@ -37,7 +37,6 @@ One-off converter: Tory Burch "Stock List 4199 08.25_Ita.xlsx"
 """
 from __future__ import annotations
 
-import os
 import re
 import sys
 import uuid
@@ -67,10 +66,8 @@ from convert_vendor_quote_shared import (  # noqa: E402
 # ---------------------------------------------------------------------------
 BRAND = "TORY BURCH"
 GENDER = "WOMAN"
-# C+ 是「每单单独给」的 —— 这个值是本次订单用户口头指定的 +8%,不是品牌默认值。
-# 模板 C+- 列要存**纯整数**(不带 + 号),显示用的 "+8" 只在 stdout 里用。
-CPLUS = 8  # 本次订单用户指定 +8%
-CPLUS_DISPLAY = f"+{CPLUS}"  # 只用于日志显示
+CPLUS = 8  # 用户指定 +8%
+CPLUS_TEXT = f"+{CPLUS}"  # 显示成 "+8" 让 UI 醒目
 WAREHOUSE_ID = ""  # 没有工厂代码
 DEFAULT_IMAGE_ROW_HEIGHT = 92.0  # 全局默认(有图的数据行)
 
@@ -246,7 +243,7 @@ def _parse_sheet(
                     "season": str(season).strip(),
                     "origin": "",
                     "cost": cost,
-                    "cplus_text": CPLUS,          # 纯整数(模板 C+- 列规则),不是 "+8"
+                    "cplus_text": CPLUS_TEXT,
                     "supply_price": supply_price,
                     "retail_price": retail,
                     "size": size_label,
@@ -397,13 +394,10 @@ def main() -> None:
     if args.output:
         output = Path(args.output).expanduser().resolve()
     else:
-        # 默认: 源文件同级的 converted/ 目录(可用环境变量 TB_OUTPUT_ROOT 覆盖)
+        # 默认: 配置器测试文件/TB4199/converted/<clean_stem>.xlsx
         clean_stem = _clean_source_name(source.stem)
-        root = os.environ.get("TB_OUTPUT_ROOT")
         default_root = (
-            Path(root).expanduser()
-            if root
-            else source.resolve().parent / "converted"
+            Path("/Users/superlist/Desktop/表格处理/配置器测试文件") / "TB4199" / "converted"
         )
         output = default_root / f"{clean_stem}.xlsx"
 

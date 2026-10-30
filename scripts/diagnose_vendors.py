@@ -16,10 +16,7 @@ from openpyxl import load_workbook
 
 sys.path.insert(0, os.path.dirname(__file__))
 SCRIPTS = Path(__file__).parent
-
-# 本地测试数据目录。默认用仓库相对路径 testdata/,
-# 也可用环境变量 TEST_DATA_DIR 指向本机的「配置器测试文件」目录。
-TEST_DIR = Path(os.environ.get("TEST_DATA_DIR") or (SCRIPTS.parent / "testdata"))
+TEST_DIR = Path('/Users/superlist/Desktop/表格处理/配置器测试文件')
 
 VENDORS = [
     ('V1039', ['ADIDAS.xlsx', 'BURBERRY.xlsx']),
@@ -33,13 +30,9 @@ VENDORS = [
     ('V1050', ['MAISON MARGIELA PELLETTERIA U+D SS26_18.02.26.xlsx']),
 ]
 
-# 18 列模板的列号(2026-09-09 跟 template1-cn.xlsx 新表头同步)
-# 品牌(1) 图片(2) 货号(3) 描述(4) 类目(5) 材质(6) 性别(7) 颜色(8) 色号(9)
-# 季节(10) 产地(11) 零售价(12) cost(13) C+-(14) 批发价(15) 尺码(16) 数量(17) 云仓(18)
-COLS = [(1, '品牌'), (3, '货号'), (4, '描述'), (5, '类目'), (6, '材质'),
-        (7, '性别'), (8, '颜色'), (9, '色号'), (10, '季节'), (11, '产地'),
-        (12, '零售价'), (13, 'cost'), (14, 'C+-'), (15, '批发价'),
-        (16, '尺码'), (17, '数量'), (18, '云仓')]
+COLS = [(1, '品牌'), (2, '货号'), (4, '描述'), (5, '类目'), (6, '材质'),
+        (7, '颜色'), (8, '季节'), (9, '产地'), (10, 'cost'), (13, '零售价'),
+        (14, '尺码'), (15, '库存')]
 
 for vendor, files in VENDORS:
     print(f'\n========== {vendor} ==========')

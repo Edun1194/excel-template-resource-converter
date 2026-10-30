@@ -44,7 +44,7 @@ header 列(0-idx):
   类目       ← c15 Product Type
   品牌       ← "" (留空,main 走文件名兜底 → "EA7" / "EMPORIO ARMANI")
   性别       ← 从 c2 Linesheet 提取 "Man"/"Woman"/"Unisex"/"Kids"
-  云仓        ← VENDOR_ID = "V1015" (工厂=V1015,补货单4 是子类型)
+  仓库ID     ← VENDOR_ID = "V1015" (工厂=V1015,补货单4 是子类型)
 
 Linesheet 解析 (e.g. "EA7 Leather & Shoes SS26"):
   - 移除 "EA7 " 前缀 → "Leather & Shoes SS26"
@@ -168,7 +168,7 @@ def parse_rows(
     rows: List[Dict[str, object]] = []
     if not primary_file.exists():
         return rows
-    # 用模块级 VENDOR_ID 覆盖 vendor_id,保证「云仓」列稳定是 "V1015"
+    # 用模块级 VENDOR_ID 覆盖 vendor_id,保证仓库ID 列稳定是 "V1015"
     vendor_id = VENDOR_ID
 
     wb = openpyxl.load_workbook(primary_file, data_only=True)

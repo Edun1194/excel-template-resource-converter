@@ -29,7 +29,7 @@ def parse_rows(
 ) -> List[Dict[str, object]]:
     """解析 V1010 现货单(Burberry / Gucci / Longchamp / Vivienne Westwood 等)。
 
-    强制把 vendor_id 改成 V1010,保证输出「云仓」列稳定是 V1010。
+    强制把 vendor_id 改成 V1010,保证输出 仓库ID 列稳定是 V1010。
     """
     return _col14_parse(primary_file, VENDOR_ID, parser="v1010")
 

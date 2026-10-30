@@ -25,7 +25,7 @@
   季节       ← "" 留空(main 走文件名兜底 → "FW26")
   cost       ← 出厂价 (c14)
   retail     ← 批发价加币 (c15,加币)
-  云仓        ← VENDOR_ID = "VC001"
+  仓库ID     ← VENDOR_ID = "VC001"
   品牌       ← "" 留空(main 走文件名兜底 → "CANADA GOOSE")
   性别       ← 从 CN NAME 提取 "男" → "Man" / "女" → "Woman" / 否则 ""
   类目       ← 从 系列 猜:VEST → "Vest" / JACKET → "Jacket" / HOODY → "Hoody" / ...
@@ -327,7 +327,7 @@ def parse_rows(
     rows: List[Dict[str, object]] = []
     if not primary_file.exists():
         return rows
-    # 用模块级 VENDOR_ID 覆盖 vendor_id,保证「云仓」列稳定是 "VC001"
+    # 用模块级 VENDOR_ID 覆盖 vendor_id,保证仓库ID 列稳定是 "VC001"
     vendor_id = VENDOR_ID
 
     wb = openpyxl.load_workbook(primary_file, data_only=True)

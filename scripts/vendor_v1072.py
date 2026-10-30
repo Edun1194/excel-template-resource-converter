@@ -311,7 +311,7 @@ def parse_rows(
 ) -> List[Dict[str, object]]:
     """解析 V1072 (BURBERRY) 现货单。
 
-    强制把 vendor_id 改成 V1072,保证输出「云仓」列稳定。
+    强制把 vendor_id 改成 V1072,保证输出 仓库ID 列稳定。
     性别/类目/颜色 全部从描述里拆。
     """
     rows: List[Dict[str, object]] = []

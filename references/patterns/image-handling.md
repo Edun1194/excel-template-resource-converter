@@ -562,6 +562,46 @@ for r in range(2, ws.max_row + 1):
 - 如果是 *per-row* 模式(同一 SKU 多行不同图)→ 不能共享,必须每行自己拿
 - 现在 ATS V1015 = per-row,实测
 
+### 15.1 ⚠️ 上面的 `load_richvalue_images` **写死了 E 列 + 只认 2 个 `<v>` 的 rv** — 2026-10-30 踩坑
+
+POLO RALPH LAUREN MAN FW27(PRL ATS 版式)的图**在 B 列**,而且 rv 有 **6 个 `<v>`**,
+上面那套正则 `<rv s="\d+"><v>(\d+)</v><v>(\d+)</v></rv>` **一条都匹配不上** → 静默返回空。
+
+已加通用版 `convert_vendor_quote_shared.load_richvalue_images_by_col(primary_file, col_letter)`:
+
+```python
+from convert_vendor_quote_shared import load_richvalue_images_by_col
+imgs = load_richvalue_images_by_col(primary_file, "B")   # {row_1idx: [{bytes, format}]}
+```
+
+它按 **`rdrichvaluestructure.xml` 的结构定义**取字段名, 不写死字段序号, 支持两种结构:
+
+| rv 的 `s` | 结构 | 字段 | 链路 |
+|---|---|---|---|
+| `0` | `_webimage` | `WebImageIdentifier` / `CalcOrigin` / `ComputedImage` / `ImageSizing` / `Text` | → `rdRichValueWebImage.xml` 的 `webImageSrd` 序号 → `<blip r:id>` → `_rels/rdRichValueWebImage.xml.rels` → `.jpeg` |
+| `1` / `2` | `_localImage` | `_rvRel:LocalImageIdentifier` / `CalcOrigin` [/ `Text`] | → `richValueRel.xml` 的 `<rel>` 序号 → `_rels/richValueRel.xml.rels` → `.png` |
+
+实测(POLO RL MAN FW27): 2010 个带 `vm` 的 cell **2010/2010 全部命中, 0 遗漏**,
+输出图片字节与源 md5 完全一致。
+
+⚠️ **`vm` 是 1-idx, rv 列表是 0-idx, 差 1** —— 这条两种实现都一样,别搞反。
+
+### 15.2 尺码行共享图(源里只有块首行有图)
+
+PRL ATS / GUCCI 平铺库存清单这类版式: **一个货号连续多行(一行一个尺码), 但只有块首行有图**。
+用户要求转换后**每个尺码行都带图** → 解析时按货号块把图共享给块内所有行:
+
+```python
+if sku != cur_sku:
+    cur_sku = sku
+    cur_images = images_by_row.get(r, [])   # 块首行的图
+# ... 块内每一行都用 cur_images
+```
+
+实测: 2165 个产品 / 2010 个有图 → 输出 17032 个带图行 = 有图产品的全部尺码行,
+1636 个缺图行 = 155 个源文件本来就没图的产品(与源一致)。
+media 去重生效: 17032 个 anchor 只存 1934 个图片文件。
+
 ## 16. ⚠️ `openpyxl.Image.width/height` 单位是**像素**(不是 EMU) — 2026-08-28 踩坑
 
 **症状**:明明给 `img.width = new_w` 赋了像素值,Excel 打开后图片巨大(几个屏幕放不下),有时 79ft 高这种"天上一脚地上一脚"。

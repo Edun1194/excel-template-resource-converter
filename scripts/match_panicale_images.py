@@ -48,12 +48,7 @@ for ext in [".jp2", ".jpeg2000", ".jpx", ".j2k", ".jpf"]:
 # ---------------------------------------------------------------------------
 # 配置
 # ---------------------------------------------------------------------------
-# V1067 数据目录。默认用仓库相对路径 testdata/V1067,
-# 也可用环境变量 V1067_BASE 指向本机的实际目录。
-V1067_BASE = Path(
-    os.environ.get("V1067_BASE")
-    or (Path(__file__).resolve().parent.parent / "testdata" / "V1067")
-)
+V1067_BASE = Path("/Users/superlist/Desktop/表格处理/配置器测试文件/V1067")
 IMG_DIR_MEN = V1067_BASE / "PANICALE高清图-货号+色号" / "FW26 MEN"
 IMG_DIR_WOMEN = V1067_BASE / "PANICALE高清图-货号+色号" / "FW26 WOMEN"
 OUT_DIR = V1067_BASE / "converted"
@@ -224,14 +219,20 @@ def main() -> None:
     import argparse
 
     ap = argparse.ArgumentParser()
-    ap.add_argument("--men-src", required=True, help="男士 xlsx(必填)")
-    ap.add_argument("--women-src", required=True, help="女士 xlsx(必填)")
+    ap.add_argument("--men-src", default=None, help="男士 xlsx")
+    ap.add_argument("--women-src", default=None, help="女士 xlsx")
     ap.add_argument("--men-sheet", default="Sheet1", help="男士目标 sheet")
     ap.add_argument("--women-sheet", default="EstrazioneGiacenza2026082609490", help="女士目标 sheet")
     args = ap.parse_args()
 
-    men_src = Path(args.men_src).expanduser().resolve()
-    women_src = Path(args.women_src).expanduser().resolve()
+    men_src = (
+        Path(args.men_src).expanduser().resolve() if args.men_src
+        else Path("/Users/superlist/.minimax/v2/assets/2026/08/28/17-29-29-691-asset_20260828-172929-691_e3b432fb2c39_33adb773-男士FW26.xlsx")
+    )
+    women_src = (
+        Path(args.women_src).expanduser().resolve() if args.women_src
+        else Path("/Users/superlist/.minimax/v2/assets/2026/08/28/18-42-04-038-asset_20260828-184204-038_eea453a5b0c1_931e32e4-女士FW26.xlsx")
+    )
 
     print("Building image indexes...")
     men_idx = build_image_index(IMG_DIR_MEN)

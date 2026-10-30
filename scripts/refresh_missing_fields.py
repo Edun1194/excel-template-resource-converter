@@ -6,7 +6,6 @@
 - · 部分空 - 源数据部分缺失,通常可接受
 - ✓ 全部填 - OK
 """
-import os
 import re
 import sys
 import subprocess
@@ -14,10 +13,7 @@ from pathlib import Path
 from openpyxl import load_workbook
 
 sys.path.insert(0, str(Path(__file__).parent))
-
-# 本地测试数据目录。默认用仓库相对路径 testdata/,
-# 也可用环境变量 TEST_DATA_DIR 指向本机的「配置器测试文件」目录。
-TEST_DIR = Path(os.environ.get("TEST_DATA_DIR") or (Path(__file__).parent.parent / "testdata"))
+TEST_DIR = Path('/Users/superlist/Desktop/表格处理/配置器测试文件')
 
 VENDORS = [
     ('V1003', ['GUCCI new ready goods.xlsx']),
@@ -35,13 +31,10 @@ VENDORS = [
     ('V1050', ['MAISON MARGIELA PELLETTERIA U+D SS26_18.02.26.xlsx']),
 ]
 
-# 字段列定义（按 18 列模板列号,2026-09-09 跟 template1-cn.xlsx 新表头同步）
-# 品牌(1) 图片(2) 货号(3) 描述(4) 类目(5) 材质(6) 性别(7) 颜色(8) 色号(9)
-# 季节(10) 产地(11) 零售价(12) cost(13) C+-(14) 批发价(15) 尺码(16) 数量(17) 云仓(18)
-COLS = [(1, '品牌'), (3, '货号'), (4, '描述'), (5, '类目'), (6, '材质'),
-        (7, '性别'), (8, '颜色'), (9, '色号'), (10, '季节'), (11, '产地'),
-        (12, '零售价'), (13, 'cost'), (14, 'C+-'), (15, '批发价'),
-        (16, '尺码'), (17, '数量'), (18, '云仓')]
+# 字段列定义（按模板列号）
+COLS = [(1, '品牌'), (2, '货号'), (4, '描述'), (5, '类目'), (6, '材质'),
+        (7, '颜色'), (8, '季节'), (9, '产地'), (10, 'cost'), (13, '零售价'),
+        (14, '尺码'), (15, '库存')]
 
 # 每个 vendor 的已知问题(从源结构分析)
 KNOWN_ISSUES = {

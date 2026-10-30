@@ -36,7 +36,7 @@
 | `linesheet.py` | LEMAIRE / Alexander Wang / GANNI | `Style Number` + `Available Sizes` + `Style Image` | 尺码在 **'Available Sizes' 文本列**,按逗号拆行;数量留空 |
 | `nuorder.py` | ACNE / BC / Men ss27 / POLO RL | sheet 名含 `NuORDER` + `Season`+`Style Number`+`Wholesale` | 每行一个尺码 |
 | `boss.py` | BOSS | `Style No.` + `WHS` + `SKU` | 尺码是**列**,数量在同一行同列 |
-| `salomon.py` | SALOMON | `Article code` + `Color` + `WHLS` | sheet `FTW`,R1 表头但 c14+ 是尺码换算表;尺码区全空 → 一行/货号,数量取 `Unit total` |
+| `salomon.py` | SALOMON | `Article code` + `Color` + `WHLS` | sheet `FTW`,R1 表头但 c14-c32 是**订货尺码矩阵**(R1 欧码 36/36.67…, R2 英码 3.5/4/4.5…);**期货单: 忽略数量, 每个 SKU × 全部尺码展开, 数量留空** |
 | `longchamp.py` | LONGCHAMP | `Code Style` + `Tarif Gros` + `Qté` | sheet `QTE BDC`,尺码在固定字段区之后(c34);数量 `Qté` 空则取 `Qty`;**该文件无行级图片** |
 | `vw.py` | VIVIENNE WESTWOOD | `Generic Prod Code` + `Available Qty` + `WHL` | sheet `Foglio1`,每行一个尺码;`Prod Brand` 是内部码不是品牌名;`Product Image` 是 `#VALUE!` 无图 |
 
@@ -46,11 +46,31 @@
    `'Wholesale (EUR)'` → 归一化后 `wholesaleeur`,所以别名要同时写
    `("Wholesale (EUR)", "Wholesale (USD)", "Wholesale Price (EUR)", "Wholesale Price", "Wholesale")`。
    归一化会**去括号**:去括号后才能对上 `'Wholesale (EUR)'`。
+   ⚠️ **`header_col_map` 是「归一化后精确相等」匹配, 不是前缀匹配 —— 别名必须写全。**
+   写成截断版会让字段**静默变空**(不会报错, 只会少值)。踩过的坑(SALOMON FTW):
+   | 别名(错) | 源表头(实际) | 后果 |
+   |---|---|---|
+   | `Category BU P` | `Category BU Perimeter` | 类目全空 |
+   | `Model Euro Re` | `Model Euro Retail Price €` | 零售价全空 |
+   | `Unit total` | `Unit total (10 pcs min)` | 数量取不到 |
+   | `Value total` | `Value total (€)` | Value 取不到 |
+
+   改完别名**一定要重跑看字段是不是真填上了**, 别只看行数对不对。
 2. **detect 的表头特征必须同时含全部关键词**才算命中。
    宽松匹配会让 Linesheet 和 NuORDER 互相误判——两者都有 `Style Number`。
 3. **尺码区起点 = 最后一个已映射固定字段列 + 1**。
    否则 `Name` 这种 4 字母词会被误判成尺码。
+   **尺码区右边界不要依赖别名匹配**: 表头变体多, 匹配不稳 —— 直接扫表头找
+   `unittotal` / `valuetotal` 开头的列(汇总列)。
 4. **数量列 = 尺码列右边最近的表头含 `Qty` 且不含 `size price` 的列**;没有就留空。
+5. **尺码矩阵型版式: 尺码区是「每个尺码的订货格」, 要按尺码展开**(2026-10-30 SALOMON FTW 踩坑)。
+   特征: 表头行下面还有一行尺码标签, 数据行里对应位置是**订货格子**。
+   - 尺码标签取**第二行**(R2)—— 第一行常是换算参考值(SALOMON: R1 欧码 36/36.67… / R2 英码 3.5/4/4.5…)
+   - **期货单: 忽略源里的数量**, 每个 SKU × **全部**尺码各出一行, 数量留空等客户填
+     (源里只有部分 SKU 填了量 —— 152 个里 17 个填了, 填了���**尺码合计精确等于汇总列**,
+      75=75/130=130/40=40 —— 但期货单的语义是全尺码供应, 客户自己填量)
+   - 结果: 152 SKU × 19 尺码 = **2888 行**, 数量全空
+   - ⚠️ 别按"源里哪些尺码有量"来筛 —— 那是现货/已下单单的逻辑, 期货单不适用
 
 ## openpyxl 读不了的 xlsx(2 个已知)
 

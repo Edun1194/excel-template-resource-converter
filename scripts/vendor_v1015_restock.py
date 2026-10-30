@@ -18,7 +18,7 @@
   cost         ← c13 WHL (warehouse price,作 cost)
   图片         ← richValue (Excel 实际显示,小 png 84x112)
   品牌         ←  ""  留空(让 main 走文件名兜底;V1015 是多品牌工厂代码)
-  云仓          ←  ""  留空
+  仓库ID       ←  ""  留空
 
 参考:references/patterns/image-handling.md §15 (richValue 机制)
 """
@@ -72,7 +72,7 @@ def parse_rows(
     rows: List[Dict[str, object]] = []
     if not primary_file.exists():
         return rows
-    # 用模块级 VENDOR_ID 覆盖 vendor_id,保证「云仓」列稳定是 "V1015"
+    # 用模块级 VENDOR_ID 覆盖 vendor_id,保证仓库ID 列稳定是 "V1015"
     vendor_id = VENDOR_ID
 
     # richValue 图(per-row,1-idx)

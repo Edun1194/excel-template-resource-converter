@@ -72,7 +72,7 @@ def parse_rows(
 ) -> List[Dict[str, object]]:
     """解析 V1038 现货单(多品牌 col 14 版式)。
 
-    强制把 vendor_id 改成 V1038,保证输出「云仓」列稳定是 V1038。
+    强制把 vendor_id 改成 V1038,保证输出 仓库ID 列稳定是 V1038。
     品牌/性别:扫源文件顶部;扫到空就 fallback 到 DEFAULT_BRAND.
     """
     # 2026-10-28: GUCCI 库存清单平铺表版式(GUCCI FW26 - WAREHOUSE A.xlsx)

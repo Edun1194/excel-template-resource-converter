@@ -8,12 +8,11 @@ V1042 (BOTTEGA VENETA) C+ Resolver 验证脚本
 
 使用方法:
   python test_cplus_resolver_v1042.py
-  (源文件用环境变量 V1042_SRC 指定,规则文件用 V1042_CPLUS_RULES 指定)
+  (路径在脚本里 hardcode 死了, 改 SRC 变量)
 """
 
 from __future__ import annotations
 
-import os
 import sys
 from collections import Counter
 from pathlib import Path
@@ -25,16 +24,8 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 from convert_vendor_quote_shared.cplus_resolver import CplusResolver
 import vendor_v1042  # noqa: E402
 
-# 源表 / 规则文件都不写死路径:默认走仓库相对 testdata/,
-# 也可用环境变量指向本机实际位置。
-SRC = Path(
-    os.environ.get("V1042_SRC")
-    or (SCRIPTS_DIR.parent / "testdata" / "V1042" / "BOTTEGA VENETA.xlsx")
-)
-RULES = Path(
-    os.environ.get("V1042_CPLUS_RULES")
-    or (SCRIPTS_DIR.parent / "assets" / "rules" / "cplus" / "BOTTEGA VENETA.yaml")
-)
+SRC = Path("/Users/superlist/Desktop/表格处理/配置器测试文件/V1042/BOTTEGA VENETA.xlsx")
+RULES = SCRIPTS_DIR.parent / "assets" / "rules" / "cplus" / "BOTTEGA VENETA.yaml"
 
 
 def main():

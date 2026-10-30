@@ -35,7 +35,7 @@
   retail     ← c10 CLIENTE
   品牌       ← "" 留空(main 走文件名兜底 → "CANADA GOOSE")
   性别       ← "Woman" (从文件名"WOMAN")
-  云仓        ← VENDOR_ID = "VC002"
+  仓库ID     ← VENDOR_ID = "VC002"
 
 图片:openpyxl ws._images 按 anchor._from.row (0-idx) 分桶,
      42 张图,R3-R49 范围(实测 R4-R48 产品行 1:1 配图)。

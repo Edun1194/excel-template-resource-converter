@@ -321,7 +321,7 @@ def parse_rows(
     rows: List[Dict[str, object]] = []
     if not primary_file.exists():
         return rows
-    # 用模块级 VENDOR_ID 覆盖 vendor_id,保证「云仓」列稳定是 "V1015"
+    # 用模块级 VENDOR_ID 覆盖 vendor_id,保证仓库ID 列稳定是 "V1015"
     vendor_id = VENDOR_ID
 
     wb = openpyxl.load_workbook(primary_file, data_only=True)

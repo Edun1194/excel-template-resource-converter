@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import openpyxl
 import pandas as pd
@@ -15,6 +15,7 @@ from convert_vendor_quote_shared import (
     format_cplus_text,
     guess_product_group,
     is_positive_qty,
+    load_richvalue_images_by_col,
     load_sheet_embedded_images,
     load_sheet_images_by_row,
     load_sheet_row_heights,
@@ -825,6 +826,144 @@ def _parse_size_matrix(
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# POLO RALPH LAUREN ATS 版式 (2026-10-30 新增)
+# ---------------------------------------------------------------------------
+# 源文件: POLO RALPH LAUREN MAN FW27.xlsx (单 sheet 'GRIGLIA', 18671 行 × 41 列)
+#
+# 结构:
+#   R1  : 表头(41 列) —— MATERIAL NUMBER | IMAGE | SEASON CODE | MERCH DIVISION
+#         | SHORT DIV | GLOBAL L4 | BOARD | SHORT BOARD | MODEL NAME
+#         | MODEL LONG DESCRIPTION | Merch Fabrication | FABRIC DESCRIPTION
+#         | COLOR DESCRIPTION | PRODUCT CLASS | PRODUCT SUBCLASS | ... | LABEL
+#         | SEASONALITY | SENSIBILITY | Utility Icons ×6 | MSRP (EUR)
+#         | WHSL (EUR) | SIZE | Q.TY | TOTAL ORDER
+#   R2  : 空
+#   R3+ : 数据行 —— **一行一个尺码**, 同一货号(MATERIAL NUMBER)连续多行
+#
+# 图片(richValue):
+#   IMAGE 列(c2)是 Excel 365 的**单元格内嵌图**(richValue 机制, 没有 drawing anchor),
+#   而且**一个货号只有第一个尺码行有图**, 其余尺码行的 c2 是 '-' 文本。
+#   → 转换时把块首行的图**共享给该货号的所有尺码行**(用户 2026-10-30 明确要求)。
+#
+# 字段映射:
+#   MATERIAL NUMBER     → 货号
+#   IMAGE               → 图片(同货号块内共享)
+#   MODEL LONG DESCRIPTION / MODEL NAME → 描述
+#        ⚠️ 这两列在源里**内容互换**: 有时 c9 是款号、c10 是描述, 有时反过来。
+#           规则: c10 含空格 → 取 c10, 否则取 c9。
+#   GLOBAL L4           → 类目
+#   FABRIC DESCRIPTION  → 材质
+#   COLOR DESCRIPTION   → 颜色
+#   MSRP (EUR)          → 零售价
+#   WHSL (EUR)          → cost
+#   SIZE                → 尺码(原样, 含 '30  32' / '14/ 23' 这种复合码)
+#   Q.TY                → 数量(源文件整列全空 → 留空等客户填)
+#   (源没有色号列 / 没有产地列 → 留空)
+#
+# 品牌 / 性别 / 季节:
+#   源文件没有品牌列 → 从文件名拆('POLO RALPH LAUREN MAN FW27')
+#   性别: MERCH DIVISION 前缀 'M PRL' → MAN / 'F PRL' → WOMAN; '-' 的行用文件级性别
+#   季节: 从文件名拆('FW27'); 文件名没有就退回源 c3 SEASON CODE 原值
+
+_SEASON_TOKEN_RE = re.compile(r"\b(FW|SS|AW|CW)\s*[-_]?\s*(\d{2})\b", re.IGNORECASE)
+_GENDER_TOKEN_RE = re.compile(
+    r"\b(MAN|MEN|MENS|WOMAN|WOMEN|WOMENS|WOM)\b", re.IGNORECASE
+)
+
+
+def _split_filename_meta(stem: str) -> Tuple[str, str, str]:
+    """从文件名拆 (品牌, 性别, 季节)。
+
+    'POLO RALPH LAUREN MAN FW27' → ('POLO RALPH LAUREN', 'MAN', 'FW27')
+
+    ⚠️ App 上传时走 ``werkzeug.secure_filename``, 空格会变成下划线
+       ('POLO_RALPH_LAUREN_MAN_FW27'), 所以先统一把 '_' 还原成空格。
+    """
+    s = stem.replace("_", " ")
+    season = ""
+    m = _SEASON_TOKEN_RE.search(s)
+    if m:
+        season = f"{m.group(1).upper()}{m.group(2)}"
+        s = s[:m.start()] + " " + s[m.end():]
+    gender = ""
+    m = _GENDER_TOKEN_RE.search(s)
+    if m:
+        tok = m.group(1).upper()
+        gender = "WOMAN" if tok.startswith("WOM") else "MAN"
+        s = s[:m.start()] + " " + s[m.end():]
+    brand = re.sub(r"\s+", " ", s).strip(" -_")
+    return brand, gender, season
+
+
+def _parse_prl_material_number(
+    ws, primary_path: Path, vendor_id: str
+) -> List[Dict[str, object]]:
+    """POLO RL ATS 'MATERIAL NUMBER' 版式(一行一个尺码 + richValue 块内共享图)。"""
+    rows: List[Dict[str, object]] = []
+    images_by_row = load_richvalue_images_by_col(primary_path, "B")
+    brand, file_gender, season = _split_filename_meta(primary_path.stem)
+
+    cur_sku = ""
+    cur_images: List[Dict[str, object]] = []
+    for r, row in enumerate(ws.iter_rows(min_row=3, values_only=True), 3):
+        if not row or row[0] is None:
+            continue
+        sku = str(row[0]).strip()
+        if not sku:
+            continue
+
+        # ---- 图片: 同一个货号连续多行, 只有块首行有图 → 块内共享 ----
+        if sku != cur_sku:
+            cur_sku = sku
+            cur_images = images_by_row.get(r, [])
+        if not cur_images:
+            cand = images_by_row.get(r, [])
+            if cand:
+                cur_images = cand
+
+        def _t(idx: int) -> str:
+            v = row[idx] if idx < len(row) else None
+            return str(v).strip() if v is not None else ""
+
+        model_name = _t(8)      # MODEL NAME
+        model_desc = _t(9)      # MODEL LONG DESCRIPTION
+        # 这两列内容在源里互换 → c10 含空格才算描述
+        description = model_desc if " " in model_desc else model_name
+
+        merch = _t(3).upper()    # MERCH DIVISION
+        if merch.startswith("M PRL"):
+            gender = "MAN"
+        elif merch.startswith("F PRL"):
+            gender = "WOMAN"
+        else:
+            gender = file_gender
+
+        qty = to_float(row[39] if len(row) > 39 else None)   # Q.TY
+        rows.append({
+            "brand": brand,
+            "sku": sku,
+            "image": "",
+            "description": description,
+            "category": _t(5),            # GLOBAL L4
+            "material": _t(11),           # FABRIC DESCRIPTION
+            "color": _t(12),              # COLOR DESCRIPTION
+            "color_code": "",             # 源文件没有色号列
+            "gender": gender,
+            "season": season or _t(2),    # SEASON CODE(文件名没季节时兜底)
+            "origin": "",                 # 源文件没有产地列
+            "cost": to_float(row[37] if len(row) > 37 else None),   # WHSL (EUR)
+            "cplus_text": "",             # 由 dispatcher 的 --cplus / 规则填
+            "supply_price": None,         # 同上
+            "retail_price": to_float(row[36] if len(row) > 36 else None),  # MSRP (EUR)
+            "size": _t(38),               # SIZE
+            "quantity": int(round(qty)) if qty is not None else None,
+            "vendor_id": vendor_id,
+            "image_items": cur_images,
+        })
+    return rows
+
+
 def parse_rows(primary_path: Path, _: Optional[Path], vendor_id: str) -> List[Dict[str, object]]:
     base_dir = primary_path if primary_path.is_dir() else primary_path.parent
     markup_map = _build_markup_map(base_dir / "cost+.txt")
@@ -838,7 +977,6 @@ def parse_rows(primary_path: Path, _: Optional[Path], vendor_id: str) -> List[Di
         # 用 load_sheet_images_by_row (简单 anchor row 索引,不用 SALOMON-style 慢解析)
         try:
             wb_probe = openpyxl.load_workbook(xlsx_file, read_only=True, data_only=True)
-            griglia_images = load_sheet_images_by_row(xlsx_file)
             handled = False
             for sname in wb_probe.sheetnames:
                 ws_probe = wb_probe[sname]
@@ -848,11 +986,38 @@ def parse_rows(primary_path: Path, _: Optional[Path], vendor_id: str) -> List[Di
                     and isinstance(r1c2, str)
                     and r1c2.strip().lower() == "style number"
                 ):
+                    # load_sheet_images_by_row 是**非 read_only** 加载(整份进内存),
+                    # 只在真的命中 GRIGLIA 版式时才付这个代价
+                    # (POLO RL ATS 那个 30MB / 18671 行的文件扛不住)
+                    griglia_images = load_sheet_images_by_row(xlsx_file)
                     rows = _parse_griglia(ws_probe, vendor_id, griglia_images)
                     if rows:
                         all_rows.extend(rows)
                     handled = True
                     break
+            if not handled:
+                # 2026-10-30 新增: POLO RL ATS 'MATERIAL NUMBER' 版式(richValue 内嵌图)
+                for sname in wb_probe.sheetnames:
+                    ws_probe = wb_probe[sname]
+                    r1 = next(
+                        ws_probe.iter_rows(min_row=1, max_row=1, values_only=True), ()
+                    )
+                    if not r1:
+                        continue
+                    h1 = str(r1[0]).strip().upper() if r1[0] is not None else ""
+                    h2 = (
+                        str(r1[1]).strip().upper()
+                        if len(r1) > 1 and r1[1] is not None
+                        else ""
+                    )
+                    if h1 == "MATERIAL NUMBER" and h2 == "IMAGE":
+                        sheet_rows = _parse_prl_material_number(
+                            ws_probe, xlsx_file, vendor_id
+                        )
+                        if sheet_rows:
+                            all_rows.extend(sheet_rows)
+                        handled = True
+                        break
             wb_probe.close()
             if handled:
                 continue

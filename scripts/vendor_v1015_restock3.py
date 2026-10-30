@@ -43,7 +43,7 @@
   类目       ← c2 Category (READY TO WEAR / SHOES / ...)
   性别       ← c1 Sector: WOMAN→Donna / MAN→Uomo
   品牌       ← ""  (留空,main 走文件名兜底 → "GIORGIO ARMANI")
-  云仓        ← VENDOR_ID = "V1015" (工厂 = V1015, 补货单 3 是子类型)
+  仓库ID     ← VENDOR_ID = "V1015" (工厂 = V1015, 补货单 3 是子类型)
 
 图片:openpyxl ws._images 按 anchor._from.row (0-idx) 分桶。
      每个产品行有 2-3 张图 (Style-Fabric / Sketch / Fabric-Color),
@@ -264,7 +264,7 @@ def parse_rows(
     rows: List[Dict[str, object]] = []
     if not primary_file.exists():
         return rows
-    # 用模块级 VENDOR_ID 覆盖 vendor_id,保证「云仓」列稳定是 "V1015"
+    # 用模块级 VENDOR_ID 覆盖 vendor_id,保证仓库ID 列稳定是 "V1015"
     vendor_id = VENDOR_ID
 
     wb = openpyxl.load_workbook(primary_file, data_only=True)
