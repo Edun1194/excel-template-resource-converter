@@ -99,12 +99,27 @@ def parse(primary_file: Path, vendor_id: str) -> List[Dict[str, object]]:
             material = normalize_text(cellv(ws, r, COL.get("material")))
             img_items = images.get(r, [])
 
-            emitted = False
-            for c in size_cols:
-                qv = ws.cell(r, c).value
-                if not isinstance(qv, (int, float)):
-                    continue
-                size = normalize_text(ws.cell(hdr, c).value)
+            # 期货口径(2026-10-30 用户决定): **忽略数量**, 按源 'Sizes' 文本列展开
+            # 该 SKU 的全部供应尺码, 数量一律留空等客户填。
+            #
+            # 为什么用 'Sizes' 文本列而不是尺码网格: 'Sizes' 是**每个 SKU 自带的尺码表**
+            # ('S, M, L, XL, XXL, XXXL, 4XL, 5XL, 6XL' / 复合码 '29/32, 29/34, …' /
+            # 一片装 'PZ.'), 而网格那 82 列是全表通用的 —— 只按"网格里有数"出尺码,
+            # 会让绝大多数 SKU 一个尺码都没有(实测 426 行里只有 23 行有量)。
+            sizes_text = normalize_text(cellv(ws, r, COL.get("sizes_text")))
+            size_list = [s.strip() for s in sizes_text.split(",") if s.strip()]
+            if not size_list:
+                # 兜底: 'Sizes' 为空 → 用网格里有数的那几个尺码
+                size_list = [
+                    normalize_text(ws.cell(hdr, c).value)
+                    for c in size_cols
+                    if isinstance(ws.cell(r, c).value, (int, float))
+                    and normalize_text(ws.cell(hdr, c).value)
+                ]
+            if not size_list:
+                size_list = [""]          # 连尺码都没有 → 一行, 尺码留空
+
+            for size in size_list:
                 rows.append({
                     "brand": "",
                     "sku": sku,
@@ -122,32 +137,7 @@ def parse(primary_file: Path, vendor_id: str) -> List[Dict[str, object]]:
                     "supply_price": None,
                     "retail_price": retail,
                     "size": size,
-                    "quantity": int(round(qv)),
-                    "vendor_id": vendor_id,
-                    "image_items": img_items,
-                })
-                emitted = True
-
-            if not emitted:
-                # 源文件这行没填任何尺码数量 → 一行, 尺码留空, 数量取 Total Units
-                rows.append({
-                    "brand": "",
-                    "sku": sku,
-                    "image": "",
-                    "description": desc,
-                    "category": "",
-                    "material": material,
-                    "color": color,
-                    "color_code": "",
-                    "gender": "",
-                    "season": "",
-                    "origin": "",
-                    "cost": cost,
-                    "cplus_text": "",
-                    "supply_price": None,
-                    "retail_price": retail,
-                    "size": "",
-                    "quantity": to_float(cellv(ws, r, COL.get("total_units"))),
+                    "quantity": None,     # 期货单: 数量留空等客户填
                     "vendor_id": vendor_id,
                     "image_items": img_items,
                 })

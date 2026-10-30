@@ -56,6 +56,15 @@ GENDER_MAP = {
     "MAN": "Man", "MEN": "Man", "UOMO": "Man",
 }
 
+# 源 'Prod Size' 列里的"没有尺码"占位符(一片装商品写 '---')→ 留空
+_SIZE_PLACEHOLDERS = {"---", "--", "-", "–", "—", "/"}
+
+
+def _clean_size(value: str) -> str:
+    """尺码占位符('---' 一片装) → 留空; 其余原样。"""
+    s = (value or "").strip()
+    return "" if s in _SIZE_PLACEHOLDERS else s
+
 
 def looks_like_vw(ws) -> bool:
     hdr = find_header_row(ws, SIGNATURE, max_scan=6)
@@ -108,8 +117,8 @@ def parse(primary_file: Path, vendor_id: str) -> List[Dict[str, object]]:
                 "cplus_text": "",
                 "supply_price": None,
                 "retail_price": None,          # 源文件没有零售价
-                "size": normalize_text(cellv(ws, r, COL.get("size"))),
-                "quantity": to_float(cellv(ws, r, COL.get("qty"))),
+                "size": _clean_size(normalize_text(cellv(ws, r, COL.get("size")))),
+                "quantity": None,                  # 期货单: 数量留空等客户填
                 "vendor_id": vendor_id,
                 "image_items": images.get(r, []),
             })

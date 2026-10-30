@@ -34,11 +34,11 @@
 | 模块 | 版式 | 表头特征(SIGNATURE) | 尺码/数量 |
 |---|---|---|---|
 | `linesheet.py` | LEMAIRE / Alexander Wang / GANNI | `Style Number` + `Available Sizes` + `Style Image` | 尺码在 **'Available Sizes' 文本列**,按逗号拆行;数量留空 |
-| `nuorder.py` | ACNE / BC / Men ss27 / POLO RL | sheet 名含 `NuORDER` + `Season`+`Style Number`+`Wholesale` | 每行一个尺码 |
-| `boss.py` | BOSS | `Style No.` + `WHS` + `SKU` | 尺码是**列**,数量在同一行同列 |
+| `nuorder.py` | ACNE / BC / Men ss27 / POLO RL | sheet 名含 `NuORDER` + `Season`+`Style Number`+`Wholesale` | **分两种**: 行级尺码(ACNE/BC/POLO RL,一行一个尺码)/ 网格型(Men ss27,列=尺码) |
+| `boss.py` | BOSS | `Style No.` + `WHS` + `SKU` | 尺码取 **'Sizes' 文本列**(每个 SKU 自带尺码表),按逗号拆行;数量留空 |
 | `salomon.py` | SALOMON | `Article code` + `Color` + `WHLS` | sheet `FTW`,R1 表头但 c14-c32 是**订货尺码矩阵**(R1 欧码 36/36.67…, R2 英码 3.5/4/4.5…);**期货单: 忽略数量, 每个 SKU × 全部尺码展开, 数量留空** |
 | `longchamp.py` | LONGCHAMP | `Code Style` + `Tarif Gros` + `Qté` | sheet `QTE BDC`,尺码在固定字段区之后(c34);数量 `Qté` 空则取 `Qty`;**该文件无行级图片** |
-| `vw.py` | VIVIENNE WESTWOOD | `Generic Prod Code` + `Available Qty` + `WHL` | sheet `Foglio1`,每行一个尺码;`Prod Brand` 是内部码不是品牌名;`Product Image` 是 `#VALUE!` 无图 |
+| `vw.py` | VIVIENNE WESTWOOD | `Generic Prod Code` + `Available Qty` + `WHL` | sheet `Foglio1`,每行一个尺码(`Prod Size`);`---` 是一片装占位符 → **留空**;`Prod Brand` 是内部码不是品牌名;`Product Image` 是 `#VALUE!` 无图 |
 
 ### 通用规律(反复验证)
 
@@ -71,6 +71,33 @@
       75=75/130=130/40=40 —— 但期货单的语义是全尺码供应, 客户自己填量)
    - 结果: 152 SKU × 19 尺码 = **2888 行**, 数量全空
    - ⚠️ 别按"源里哪些尺码有量"来筛 —— 那是现货/已下单单的逻辑, 期货单不适用
+
+6. **期货统一口径(2026-10-30 用户拍板,适用全部 category-futures 版式)**:
+   **忽略源里的数量,每个 SKU × 全部尺码各出一行,数量一律留空等客户填。**
+   不要按"源里哪些尺码有量"筛 —— 期货单的语义是全尺码供应。
+7. **尺码列的两种版式必须分开走(2026-10-30 Men ss27 踩坑)**:
+   - **行级尺码**(尺码列只有 1 个): 尺码值**就在那一列里**, 数量取右边的 `Qty` 列。
+     ACNE / BC / POLO RL 都是这种。
+   - **网格型**(尺码列 > 1): 列 = 尺码, 行 = SKU, 单元格里的数字是**订货数量不是尺码**!
+     Men ss27 是这种(c18=XXS … c34=4XL, 中间夹 `XXS size price` 这种单价列)。
+     ⚠️ 网格型**绝不能**走"读尺码列的值当尺码"的老路径 —— 会把 c22 的 12 / c24 的 30
+     当成尺码, 出来一堆 `12`/`30`/`38` 这种假尺码。
+   - **网格型的尺码组怎么分(靠标签类型, 不能只看列间距)**:
+     服装尺码组和鞋码组**都是**"尺码列隔一个 size price 列"排列, 列间距(间隔 ≤2)分不开。
+     规则: 从**有数据的尺码段**向两侧扩展, 直到遇到**标签类型变化**(纯数字 ↔ 含字母)。
+     Men ss27 实测: live = c22(S)/c24(M)/c26(L)/c28(XL)/c30(XXL)
+     → 向左扩到 c18(XXS)、向右扩到 c34(4XL), 遇 c36('26' 纯数字) 停
+     → 组 = c18-c34 共 9 个; 鞋码组 c36-c48 与 OS/S-M/L-XL 组整列无数据 → 不展开。
+     结果: **205 数据行 × 9 尺码 = 1845 行**, 数量全空。
+8. **尺码来源优先用「每个 SKU 自带尺码表」的文本列, 不是全表通用的网格**(BOSS 踩坑):
+   BOSS 的 `Sizes` 列每个 SKU 自带尺码表(`S, M, L, XL, XXL, XXXL, 4XL, 5XL, 6XL` /
+   复合码 `29/32, 29/34…` / 一片装 `PZ.`), 而那 82 列网格是全表通用的 ——
+   只按"网格里有数"出尺码, 会让绝大多数 SKU 一个尺码都没有(实测 426 行里只有 23 行有量)。
+   用 `Sizes` 文本列展开: **6037 行**, 与源 `Sizes` 的尺码集合 100% 一致。
+9. **尺码占位符要清成留空**(VW 踩坑): `Prod Size` 的 `---` 是一片装商品的"没有尺码",
+   原样输出 `---` 会让客户以为是个尺码。留空即可(`_SIZE_PLACEHOLDERS`)。
+10. **`is_size_like` 要认双字母数字尺码**: `^\d+[A-Za-z]$` 漏了 `3XL`/`4XL`/`5XL`/`6XL`,
+    要放宽成 `^\d+[A-Za-z]{1,2}$`(BOSS 有 4XL/5XL/6XL)。
 
 ## openpyxl 读不了的 xlsx(2 个已知)
 
@@ -118,5 +145,17 @@ rows[i]["vendor_id"] = "品牌名称（期货）"   # 见 vendor_category_future
 - [ ] 数量列**整列为空**(不是 0)
 - [ ] 「云仓」列 = 工厂代号 / `品牌名称（期货）`
 - [ ] 尺码已展开成多行(一行一个尺码)
+- [ ] **尺码值里没有「数量」冒充的**(网格型: 不能出现 `12`/`30`/`38` 这种纯数字假尺码)
+- [ ] 尺码占位符(`---` 之类)已清成留空
 - [ ] 图片数与源文件一致(没有的版式如 LONGCHAMP/VW 确实就是 0)
 - [ ] detect 没有误判(同一份文件只命中一个版式)
+
+## 更新记录
+
+| 日期 | 变更 |
+|---|---|
+| 2026-10-27 | category-futures 通道建立(6 种版式) |
+| 2026-10-30 | SALOMON FTW 尺码矩阵修复(2888 行, 数量留空) |
+| 2026-10-30 | **期货统一口径**: 忽略数量, 全部尺码展开, 数量留空 |
+| 2026-10-30 | **Men ss27 网格型**修「把数量当尺码」(205×9=1845 行); 尺码组按标签类型划分 |
+| 2026-10-30 | **BOSS** 改用 `Sizes` 文本列展开(474 → 6037 行); **VW** 清 `---` 占位符 |

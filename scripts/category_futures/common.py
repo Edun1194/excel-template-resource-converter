@@ -196,7 +196,9 @@ def is_size_like(label: str) -> bool:
         return True
     if re.match(r"^[A-Za-z]{1,4}(\s*/\s*[A-Za-z0-9]{1,4})?$", s):
         return True
-    if re.match(r"^\d+[A-Za-z]$", s):
+    # 数字打头 + 字母: 3X / 3XL / 4XL / 5XL / 6XL …
+    # (2026-10-30: 原来只认 `^\d+[A-Za-z]$`, 漏了 '3XL'/'4XL' 这类双字母尺码)
+    if re.match(r"^\d+[A-Za-z]{1,2}$", s):
         return True
     return False
 
