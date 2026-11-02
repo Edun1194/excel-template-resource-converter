@@ -213,7 +213,7 @@ template-resource-converter/
 | `V1062` | `vendor_v1062.py` | GUCCI WAREHOUSE B/C(col14 老单)+ CANADA GOOSE FW26 WAREHOUSE C(平铺) |
 | `V1063` | `vendor_v1063.py` | |
 | `V1064` | `vendor_v1064.py` | |
-| `V1067` | `vendor_v1067.py` | PANICALE 现货单 + 外部图片目录匹配 |
+| `V1067` | `vendor_v1067.py` | PANICALE 现货单, **4 个版式**(legacy横排 / packing list / ARTICOLO块 / FW26 STOCK LIST带图) |
 | `V1070` | `vendor_v1070.py` | BRUNELLO CUCINELLI 现货单 |
 | `V1070-期货` | `vendor_v1070_nuorder.py` | BC NuORDER SS27/SS28 |
 | `V1072` | `vendor_v1072.py` | BURBERRY 现货单 |
@@ -482,7 +482,7 @@ def get_vendor_meta() -> Dict[str, object]:
 | `XLS-to-XLSX-image-analysis-2026-07-10.md` | XLS→XLSX 图片结构分析 |
 | `generic-multi-section-xls-debugging.md` | 多 section xls 调试 |
 
-**品牌专属笔记** (`references/vendors/`): `V0000-notes.md`(MOORER / GUCCI STOCKLIST / HERNO 三版式)、`V1042-POLO-RALPH-LAUREN-notes.md`。
+**品牌专属笔记** (`references/vendors/`): `V0000-notes.md`(MOORER / GUCCI STOCKLIST / HERNO 三版式)、`V1042-POLO-RALPH-LAUREN-notes.md`、`V1067-PANICALE-notes.md`(4 个版式 + 客户上传模板规格)。
 其余品牌专属列偏移**故意不放**(2026-07-15 决定),按需现场分析。
 
 ## 环境变量

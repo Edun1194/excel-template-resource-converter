@@ -42,6 +42,20 @@
 
 识别:看 sheet 有没有 "ARTICOLO/ARTICLE" 文本 — 有 → Mode 3,否则按 R1 c5 是不是 "Style number" 判 Mode 2 vs Mode 1。
 
+【Mode 4: FW26 STOCK LIST 尺码行/颜色行 + T 列内嵌图】(2026-11-02 加)
+- 源: "PANICALE FW26 STOCK LIST {MEN|WOMEN} 30.10.xlsx"(供应商直接给带图版本)
+  单 sheet 'in', R1 中文表头:
+    c1  商品国际编码 + 色号 | c2 商品描述 | c3 颜色 | c4-c13 尺码矩阵(10 列)
+    | c14 材质 | c15 数量 | c16 cost出厂（欧元）| c17 加价率（+/-%）
+    | c18 供货价(公式) | c19 原价(欧元)(公式) | c20 图片(内嵌图锚在这列)
+- "尺码行":c1 单 token(如 "U390010PA")→ c4-c13 是该 SKU 的尺码标签
+- "颜色行":c1 三 token(如 "U390010PA 39U36 0200")→ c4-c13 是各尺码数量
+- 图片: 供应商已把图嵌在 c20(锚在颜色行), 不用再去图库匹配
+- ⚠️ 加价率两个文件写法不同: MEN 是 50(整数百分数), WOMEN 是 0.5(小数) → 都要认
+- ⚠️ c18/c19 是公式 '=P2*1.5' / '=P2*2.5', 缓存值是 '#VALUE!' → 自己按系数算
+- ⚠️ "TU"(一码通)SKU 的数量可能落在没标签的列上 → 整行尺码格求和
+- 货号拼法: `<国际编码>-<色号 空格改->`, 色号 = c1 的后两段("39U36 0200"), 跟客户图库文件名一致
+
 图片外部目录(Mode 1 才有):`<V1067>/PANICALE高清图-货号+色号/FW26 {WOMEN|MEN}/`
 文件名:`<SKU> <色码>.{jpg|png}`
 SKU 变体映射:xlsx 的 `/M` `/NN` `/MC` 等 → 文件名 `-M` `-NN` `-MC`(`/` → `-`)
@@ -89,6 +103,25 @@ PL_COL_BARCODE = 13   # c14 Barcode (e.g. "2025000593190")
 PL_COL_ORIGIN = 15    # c16 Origin (e.g. "ITALY")
 
 SIZE_LABEL = "ONE SIZE"  # 单尺码产品(SOCKS/TIE)fallback
+
+
+# ---------------------------------------------------------------------------
+# Mode 4 列定义 (FW26 STOCK LIST 尺码行/颜色行)
+# ---------------------------------------------------------------------------
+ST_COL_KEY = 1        # c1  商品国际编码 + 色号
+ST_COL_DESC = 2       # c2  商品描述
+ST_COL_COLOR = 3      # c3  颜色
+ST_COL_SIZE_START = 4 # c4  尺码矩阵起点(10 列)
+ST_COL_SIZE_END = 13  # c13 尺码矩阵终点(exclusive)
+ST_COL_MATERIAL = 14  # c14 材质
+ST_COL_QTY = 15       # c15 数量(合计)
+ST_COL_COST = 16      # c16 cost出厂（欧元）
+ST_COL_CPLUS = 17     # c17 加价率（+/-%）
+ST_COL_SUPPLY = 18    # c18 供货价(公式)
+ST_COL_RETAIL = 19    # c19 原价(欧元)(公式)
+ST_COL_IMAGE = 20     # c20 图片(内嵌图锚在这一列)
+
+ONE_SIZE_LABEL = "TU"  # 一码通(源里尺码标签写 'TU')
 
 
 def _to_int_qty(value) -> int:
@@ -683,13 +716,214 @@ def _parse_new_layout(
     return rows
 
 
+# ---------------------------------------------------------------------------
+# Mode 4: FW26 STOCK LIST (尺码行 / 颜色行 + T 列内嵌图)
+# ---------------------------------------------------------------------------
+
+def _detect_stocklist_layout(ws) -> bool:
+    """是不是 Mode 4: R1 表头 c1 含「国际编码」且 c4 是「尺码」。
+
+    ⚠️ 必须排在 Mode 1(legacy) 前面 —— 两者都是 R1 中文表头, Mode 1 会误判。
+
+    ⚠️ 两个文件的 c1 表头不一样(只有这一列不同, 其余列完全一致):
+      MEN   → "商品国际编码 + 色号"
+      WOMEN → "国际编码"
+    所以按「含 国际编码」来判, 不要写死整串。
+    """
+    key_header = normalize_text(ws.cell(row=1, column=ST_COL_KEY).value)
+    size_header = normalize_text(ws.cell(row=1, column=ST_COL_SIZE_START).value)
+    return "国际编码" in key_header and size_header == "尺码"
+
+
+def _stocklist_file_meta(path: Path) -> Tuple[str, str]:
+    """从文件名取 (性别, 季节)。
+
+    "PANICALE FW26 STOCK LIST MEN 30.10_with_images.xlsx" → ("Man", "FW26")
+    "PANICALE FW26 STOCK LIST WOMEN 30.10_with_images.xlsx" → ("Woman", "FW26")
+    """
+    stem = path.stem.upper()
+    gender = ""
+    if re.search(r"\bWOMEN\b", stem) or re.search(r"\bDONNA\b", stem):
+        gender = "Woman"
+    elif re.search(r"\bMEN\b", stem) or re.search(r"\bUOMO\b", stem):
+        gender = "Man"
+    m = re.search(r"\b(FW|SS)\s*(\d{2})\b", stem)
+    season = f"{m.group(1)}{m.group(2)}" if m else "FW26"
+    return gender, season
+
+
+def _normalize_cplus_pct(value: Optional[float]) -> Optional[float]:
+    """加价率归一成「百分数整数」。
+
+    ⚠️ 两个文件写法不一样: MEN 是 50(百分数), WOMEN 是 0.5(小数) → 都要认。
+    """
+    if value is None:
+        return None
+    v = float(value)
+    if 0 < abs(v) <= 1:
+        v *= 100
+    return v
+
+
+def _stocklist_price_multipliers(path: Path) -> Tuple[Optional[float], Optional[float]]:
+    """读 c18(供货价) / c19(原价) 的公式系数 → (供货价系数, 原价系数)。
+
+    源里这两列是公式 '=P2*1.5' / '=P2*2.5', 但缓存值是 '#VALUE!'(公式错误),
+    data_only=True 读不到值 → 再用 read_only + data_only=False 读一遍公式文本。
+    """
+    supply_mult: Optional[float] = None
+    retail_mult: Optional[float] = None
+    try:
+        wb = openpyxl.load_workbook(path, read_only=True, data_only=False)
+        ws = wb[wb.sheetnames[0]]
+        for i, row in enumerate(ws.iter_rows(values_only=True)):
+            if i == 0:
+                continue
+            for col, is_supply in ((ST_COL_SUPPLY, True), (ST_COL_RETAIL, False)):
+                if (is_supply and supply_mult is not None) or (not is_supply and retail_mult is not None):
+                    continue
+                v = row[col - 1] if len(row) >= col else None
+                if not (isinstance(v, str) and v.startswith("=")):
+                    continue
+                m = re.search(r"\*\s*([0-9]*\.?[0-9]+)", v)
+                if m:
+                    if is_supply:
+                        supply_mult = float(m.group(1))
+                    else:
+                        retail_mult = float(m.group(1))
+            if supply_mult is not None and retail_mult is not None:
+                break
+        wb.close()
+    except Exception:
+        pass
+    return supply_mult, retail_mult
+
+
+def _parse_stocklist(
+    primary_file: Path, ws, vendor_id: str,
+) -> List[Dict[str, object]]:
+    """Mode 4: PANICALE FW26 STOCK LIST(尺码行/颜色行 + 内嵌图)。
+
+    结构:
+      尺码行: c1 单 token → c4-c13 是该 SKU 的尺码标签(每个 SKU 一张自己的尺码表)
+      颜色行: c1 三 token → c4-c13 是各尺码数量
+
+    货号: `<国际编码>-<色号 空格改->`
+      色号 = c1 的后两段("39U36 0200") —— 跟客户图库文件名 `<国际编码> <色号>` 一致。
+    """
+    rows: List[Dict[str, object]] = []
+    images_by_row = _load_images_by_row(ws)
+    gender, season = _stocklist_file_meta(primary_file)
+    supply_mult, retail_mult = _stocklist_price_multipliers(primary_file)
+
+    size_labels: List[Tuple[int, str]] = []   # (列号, 尺码标签) —— 记住列号, 不用序号推
+    size_row_style: str = ""           # 当前尺码表属于哪个 style
+    last_cost: Optional[float] = None
+    last_cplus: Optional[float] = None
+
+    for r in range(2, ws.max_row + 1):
+        c1 = normalize_text(ws.cell(r, ST_COL_KEY).value)
+        if not c1:
+            continue
+        parts = c1.split()
+
+        cost = to_float(ws.cell(r, ST_COL_COST).value)
+        cplus_pct = _normalize_cplus_pct(to_float(ws.cell(r, ST_COL_CPLUS).value))
+
+        # ---- 尺码行: 只带尺码标签 + 本 SKU 的价格信息 ----
+        if len(parts) == 1:
+            size_row_style = parts[0]
+            size_labels = []
+            for c in range(ST_COL_SIZE_START, ST_COL_SIZE_END + 1):
+                sv = normalize_text(ws.cell(r, c).value)
+                if sv:
+                    size_labels.append((c, sv))
+            if cost is not None:
+                last_cost = cost
+            if cplus_pct is not None:
+                last_cplus = cplus_pct
+            continue
+
+        # ---- 颜色行: c1 = "<国际编码> <色号1> <色号2>" ----
+        if len(parts) != 3:
+            continue
+        style = parts[0]
+        colour_code = " ".join(parts[1:])
+        sku = f"{style}-{colour_code.replace(' ', '-')}"
+
+        if cost is None:
+            cost = last_cost
+        if cplus_pct is None:
+            cplus_pct = last_cplus
+
+        desc = normalize_text(ws.cell(r, ST_COL_DESC).value)
+        colour = normalize_text(ws.cell(r, ST_COL_COLOR).value)
+        material = normalize_text(ws.cell(r, ST_COL_MATERIAL).value)
+
+        # 供货价 = cost × (1 + 加价率) ; 原价 = cost × 源公式系数(2.5)
+        supply_price: Optional[float] = None
+        if cost is not None and cplus_pct is not None:
+            supply_price = round(cost * (1 + cplus_pct / 100.0), 2)
+        retail_price: Optional[float] = None
+        if cost is not None and retail_mult:
+            retail_price = round(cost * retail_mult, 2)
+
+        img_items = images_by_row.get(r - 1, [])
+
+        base_row: Dict[str, object] = {
+            "brand": "PANICALE",
+            "sku": sku,
+            "image": "",
+            "description": desc,
+            "category": "",              # 源没类目字段(跟 Mode 1/2/3 一致)
+            "material": material,
+            "color": colour,
+            "color_code": colour_code,
+            "gender": gender,
+            "season": season,
+            "origin": "",                # 源没产地列
+            "cost": cost,
+            "cplus_text": str(int(cplus_pct)) if cplus_pct is not None else "",
+            "supply_price": supply_price,
+            "retail_price": retail_price,
+            "vendor_id": vendor_id,
+            "image_items": img_items,
+            "source_row_height": None,
+        }
+
+        # 尺码表对不上(颜色行不属于上一个尺码行) → 不能按位置取量
+        if size_row_style != style or not size_labels:
+            continue
+
+        # 一码通(TU): 只有一个尺码, 但数量可能落在没标签的列上 → 整行尺码格求和
+        if len(size_labels) == 1 and size_labels[0][1] == ONE_SIZE_LABEL:
+            total_qty = 0.0
+            for c in range(ST_COL_SIZE_START, ST_COL_SIZE_END + 1):
+                qv = to_float(ws.cell(r, c).value)
+                if qv and qv > 0:
+                    total_qty += qv
+            if total_qty > 0:
+                rows.append({**base_row, "size": ONE_SIZE_LABEL,
+                             "quantity": int(round(total_qty))})
+            continue
+
+        # 标准: 按列号精确取各尺码格的量
+        for c, label in size_labels:
+            qty_v = ws.cell(r, c).value
+            if not is_positive_qty(qty_v):
+                continue
+            rows.append({**base_row, "size": label,
+                         "quantity": _to_int_qty(qty_v)})
+
+    return rows
+
+
 def parse_rows(
     primary_file: Path, _: Optional[Path], vendor_id: str,
 ) -> List[Dict[str, object]]:
     rows: List[Dict[str, object]] = []
     if not primary_file.exists():
         return rows
-
     # 0) PDF 委托 — 2026-08-18:用户传的可能是 PDF 而非 xlsx
     if primary_file.suffix.lower() == ".pdf":
         try:
@@ -719,6 +953,11 @@ def parse_rows(
         # 2.0) Mode 3 优先检测(SS26 新版式) — ARTICOLO/ARTICLE 块模式
         if _detect_new_layout(ws):
             rows.extend(_parse_new_layout(primary_file, ws, vendor_id))
+            break
+        # 2.0b) Mode 4: FW26 STOCK LIST(尺码行/颜色行 + T 列内嵌图)
+        #      ⚠️ 必须排在 Mode 1 前面 —— 两者都是 R1 中文表头, Mode 1 会误判
+        if _detect_stocklist_layout(ws):
+            rows.extend(_parse_stocklist(primary_file, ws, vendor_id))
             break
         # 2.1) 判别 mode
         mode = _detect_mode(ws)
