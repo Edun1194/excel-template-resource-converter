@@ -17,9 +17,15 @@ sheet 'Foglio1', R1 表头, R2+ 数据。**每行一个 SKU+尺码**。
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
-from convert_vendor_quote_shared import normalize_text, to_float
+from openpyxl.utils import get_column_letter
+
+from convert_vendor_quote_shared import (
+    load_richvalue_images_by_col,
+    normalize_text,
+    to_float,
+)
 
 from .common import (
     cellv,
@@ -46,6 +52,7 @@ ALIASES: Dict[str, tuple] = {
     "size":       ("Prod Size ", "Prod Size"),
     "qty":        ("Available Qty ", "Available Qty"),
     "cost":       ("WHL €", "WHL"),
+    "image":      ("Product Image", "Product Img"),
 }
 
 SIGNATURE = ("Generic Prod Code", "Available Qty", "WHL")
@@ -64,6 +71,28 @@ def _clean_size(value: str) -> str:
     """尺码占位符('---' 一片装) → 留空; 其余原样。"""
     s = (value or "").strip()
     return "" if s in _SIZE_PLACEHOLDERS else s
+
+
+def _collect_images(
+    primary_file: Path, ws, image_col: Optional[int],
+) -> Dict[int, List[Dict[str, object]]]:
+    """取内嵌图 → {1-idx 行号: [{bytes, format}]}。
+
+    ⚠️ **VW 的图是 Excel「嵌入单元格」图片(richValue), 不是浮动图片**:
+    - 文件里**没有 drawing part**, 图片全在 xl/media/, 靠 xl/richData/ 关联
+    - sheet 里图片单元格是 `<c r="H2" s="10" t="e" vm="245"><v>#VALUE!</v></c>`
+      —— 单元格值显示成 `#VALUE!`, 真正的图是 vm 指向的 richValue
+    → openpyxl 的 ws._images **读不到**(0 张), 必须用
+      load_richvalue_images_by_col 按列读。
+    实测: 720 个数据行全部有图(zip 里 245 张 media, 同一张图多行复用)。
+
+    没有 richValue 图时(别的版式)退回 openpyxl 的 ws._images。
+    """
+    if image_col:
+        rv = load_richvalue_images_by_col(primary_file, get_column_letter(image_col))
+        if rv:
+            return rv
+    return extract_images(ws)
 
 
 def looks_like_vw(ws) -> bool:
@@ -93,7 +122,7 @@ def parse(primary_file: Path, vendor_id: str) -> List[Dict[str, object]]:
         if "sku" not in COL:
             return []
 
-        images = extract_images(ws)
+        images = _collect_images(primary_file, ws, COL.get("image"))
         rows: List[Dict[str, object]] = []
         for r in range(hdr + 1, ws.max_row + 1):
             sku = normalize_text(cellv(ws, r, COL.get("sku")))

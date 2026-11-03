@@ -98,6 +98,22 @@
    原样输出 `---` 会让客户以为是个尺码。留空即可(`_SIZE_PLACEHOLDERS`)。
 10. **`is_size_like` 要认双字母数字尺码**: `^\d+[A-Za-z]$` 漏了 `3XL`/`4XL`/`5XL`/`6XL`,
     要放宽成 `^\d+[A-Za-z]{1,2}$`(BOSS 有 4XL/5XL/6XL)。
+11. **图片可能是「嵌入单元格」图(richValue), 不是浮动图**(VW 踩坑, 2026-11-03):
+    - 特征: xlsx 里**没有 `xl/drawings/drawingN.xml`**, 但 `xl/media/` 有图,
+      另有 `xl/richData/`(rdrichvalue / richValueRel / rdrichvaluestructure)
+    - sheet 里的图片单元格长这样:
+      `<c r="H2" s="10" t="e" vm="245"><v>#VALUE!</v></c>`
+      —— 单元格值显示成 `#VALUE!`, 真正的图是 `vm` 指向的 richValue
+    - → **openpyxl 的 `ws._images` 返回 0 张**(没 drawing part),
+      `extract_images()` / `load_images_by_row_zip()` 也都读不到 → 图片全丢
+    - 解法: 用 shared 的 `load_richvalue_images_by_col(path, 列字母)`,
+      它按列取 `cell.vm` 并按 `rdrichvaluestructure.xml` 解析两种结构
+      (`_webimage` / `_localImage`)
+    - VW_ATS 实测: 720 个数据行全部有图(zip 里 245 张 media, 一张图多行复用),
+      产物 media 245 个、行↔图绑定 720/720 一致
+    - ⚠️ **图片列要按表头名定位**(`Product Image`), 别写死列号 ——
+      写死 H 的话换版式就静默丢图
+    - 排查手法: `zipfile` 看有没有 `xl/drawings/` 和 `xl/richData/` 就能一眼分清
 
 ## openpyxl 读不了的 xlsx(2 个已知)
 
