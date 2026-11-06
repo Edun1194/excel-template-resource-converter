@@ -189,7 +189,7 @@ template-resource-converter/
 | `A1001` | `vendor_a1001.py` | CANADA GOOSE hk 现货 .xls |
 | `V1011` | `vendor_v1011.py` | MAX MARA 意大利供应商 CATALOGO sheet |
 | `V1012` | `vendor_v1012.py` | |
-| `V1015` | `vendor_v1015.py` | |
+| `V1015` | `vendor_v1015.py` | 意大利线多版式: APC ATS REORDER(补货单) / Ready-to-ship / BOS-MONCLER / 怀远 / PRADA ITALY |
 | `V1015-补货单` | `vendor_v1015_restock.py` | richValue 路径,意大利大公司 SharePoint 风格 |
 | `V1015-补货单2` | `vendor_v1015_restock2.py` | MIUMIU ATS,3 sheet 多品类 |
 | `V1015-补货单3` | `vendor_v1015_restock3.py` | GIORGIO ARMANI C-20,4 sheet 横排尺码 |
@@ -482,7 +482,7 @@ def get_vendor_meta() -> Dict[str, object]:
 | `XLS-to-XLSX-image-analysis-2026-07-10.md` | XLS→XLSX 图片结构分析 |
 | `generic-multi-section-xls-debugging.md` | 多 section xls 调试 |
 
-**品牌专属笔记** (`references/vendors/`): `V0000-notes.md`(MOORER / GUCCI STOCKLIST / HERNO 三版式)、`V1042-POLO-RALPH-LAUREN-notes.md`、`V1067-PANICALE-notes.md`(4 个版式 + 客户上传模板规格)。
+**品牌专属笔记** (`references/vendors/`): `V0000-notes.md`(MOORER / GUCCI STOCKLIST / HERNO 三版式)、`V1042-POLO-RALPH-LAUREN-notes.md`、`V1067-PANICALE-notes.md`(4 个版式 + 客户上传模板规格)、`V1015-notes.md`(5 个子版式 + APC ATS REORDER 补货单)。
 其余品牌专属列偏移**故意不放**(2026-07-15 决定),按需现场分析。
 
 ## 环境变量

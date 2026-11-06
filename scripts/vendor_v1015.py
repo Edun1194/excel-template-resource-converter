@@ -696,6 +696,220 @@ def _parse_hk_huaiyuan(ws, vendor_id: str, images_by_row: Optional[Dict[int, Lis
     return rows
 
 
+# ---------------------------------------------------------------------------
+# APC ATS REORDER (补货单) 版式 (2026-11-06 新增)
+# ---------------------------------------------------------------------------
+# 源: "A.P.C._ ATS FW26 {ACCESSORIES|MAN RTW|WOMAN RTW}.xlsx"
+# 单 sheet 'Worksheet', 19 列, **每段重复 R15(EUR)+R16(header)**:
+#
+#   R10  c8  = 'FW26 / REORDER MEN RTW'   ← 标题(季节/单据类型/性别)
+#   R13  c2  = 'OUTERWEAR'                ← 段落大类
+#   R15  c5/c18/c19 = 'EUR'
+#   R16  header: STYLE(c2) REFERENZA(c3) VARIANT(c4) SRP(c5) TAGLIE(c6)
+#          QTà(c17) COSTO UNITARIO(c18) TOTALE(c19)
+#   尺码行: c2 = 款名('MAC AUSTER'), c6-c16 = 该款的尺码标签
+#   颜色行: c3 = 货号('WOZAA-H01299'), c4 = '<色码> <色名>', c5 = SRP,
+#           c6-c16 = 各尺码数量, c17 = QTà, c18 = 成本, c19 = TOTALE
+#   材质行: c3 = '70% RECYCLED WOOL, ...'
+#   产地行: c3 = 'Origin: BULGARIA'
+#
+# ⚠️ **这是补货单, 数量留给客户填**:
+#    实测三个文件里 QTà(c17) 和 TOTALE(c19) **全是 0**, 各尺码的数量格(c6-c16)全空。
+#    → 尺码行照常展开(每个尺码一行), 数量列留空(源里有正数才填)。
+#
+# 货号拼法(同 V1015-补货单2 MIUMIU ATS 的口径): `<REFERENZA>-<色码>`
+#   色码从 c4 的首 token 拆(3 个大写字母); 拆不开的(双色组合如 'ECRU/KAKI')
+#   → 色号留空, 颜色保留原值, 货号用 `-<色值>` 兜底(保证唯一)。
+ATS_COL_STYLE = 2       # c2  款名(尺码行) / 段落大类(段落行)
+ATS_COL_REF = 3         # c3  REFERENZA = 货号
+ATS_COL_VARIANT = 4     # c4  VARIANT = '<色码> <色名>'
+ATS_COL_SRP = 5         # c5  SRP = 零售价
+ATS_COL_SIZE_START = 6  # c6  尺码区起点(TAGLIE)
+ATS_COL_SIZE_END = 16   # c16 尺码区终点
+ATS_COL_QTY = 17        # c17 QTà(行合计, 全 0)
+ATS_COL_COST = 18       # c18 COSTO UNITARIO = 成本
+ATS_COL_TOTAL = 19      # c19 TOTALE
+
+_ATS_COLOR_RE = re.compile(r"^([A-Z]{3})\s+(.+)$")
+
+
+def _looks_like_ats_reorder(ws) -> bool:
+    """是不是 APC ATS REORDER 版式: 表头行同时含 REFERENZA + VARIANT。"""
+    limit = min(ws.max_row, 40)
+    for r in range(1, limit + 1):
+        vals = set()
+        for c in range(1, min(ws.max_column, 30) + 1):
+            v = ws.cell(r, c).value
+            if v is not None:
+                vals.add(str(v).strip().upper())
+        if "REFERENZA" in vals and "VARIANT" in vals:
+            return True
+    return False
+
+
+def _parse_ats_title(ws) -> Tuple[str, str]:
+    """从标题行('FW26 / REORDER MEN RTW')取 (季节, 性别)。
+
+    三个文件:
+      'FW26 / REORDER MEN RTW'          → ('FW26', 'Man')
+      'FW26 / REORDER WOMEN RTW'        → ('FW26', 'Woman')
+      'FW26 / REORDER ACC HOMME & FEMME'→ ('FW26', 'Unisex')
+    """
+    season = ""
+    gender = ""
+    limit = min(ws.max_row, 20)
+    for r in range(1, limit + 1):
+        for c in range(1, min(ws.max_column, 12) + 1):
+            v = ws.cell(r, c).value
+            if not isinstance(v, str) or "REORDER" not in v.upper():
+                continue
+            m = re.search(r"\b(FW|SS)\s*(\d{2})\b", v.upper())
+            if m:
+                season = f"{m.group(1)}{m.group(2)}"
+            u = v.upper()
+            if "WOMEN" in u or "DONNA" in u:
+                gender = "Woman"
+            elif "HOMME" in u and "FEMME" in u:
+                gender = "Unisex"
+            elif "MEN" in u or "UOMO" in u:
+                gender = "Man"
+            return season, gender
+    return season, gender
+
+
+def _split_ats_color(text: str) -> Tuple[str, str]:
+    """'<色码> <色名>' → (色码, 色名); 拆不开 → ('', 原值)。
+
+    例 'PIA HEATHER MARINE' → ('PIA', 'HEATHER MARINE')
+    双色组合 'ECRU/KAKI' / 'ROSE CHINE' 拆不动 → ('', 原值)
+    """
+    s = str(text or "").strip()
+    m = _ATS_COLOR_RE.match(s)
+    if m:
+        return m.group(1).strip(), m.group(2).strip()
+    return "", s
+
+
+def _parse_ats_reorder(
+    ws, vendor_id: str, images_by_row: Optional[Dict[int, List[Dict]]] = None,
+) -> List[Dict[str, object]]:
+    """APC ATS REORDER(补货单) —— 款 → 尺码行 → 颜色行(+材质行/产地行)。
+
+    数量: 源里 QTà/TOTALE 全是 0, 各尺码数量格全空 → 数量列留空(补货单口径)。
+    """
+    rows: List[Dict[str, object]] = []
+    if images_by_row is None:
+        images_by_row = _load_images_by_row(ws)
+    season, gender = _parse_ats_title(ws)
+
+    def cell(r: int, c: int) -> str:
+        v = ws.cell(r, c).value
+        return normalize_text(v) if v is not None else ""
+
+    # 重复表头行(含 REFERENZA 的行)
+    header_rows = set()
+    for r in range(1, ws.max_row + 1):
+        for c in range(1, min(ws.max_column, 30) + 1):
+            v = ws.cell(r, c).value
+            if isinstance(v, str) and v.strip().upper() == "REFERENZA":
+                header_rows.add(r)
+                break
+
+    category = ""                                   # 段落大类
+    desc = ""                                       # 款名
+    size_cols: List[Tuple[int, str]] = []           # (列号, 尺码标签)
+
+    for r in range(1, ws.max_row + 1):
+        if r in header_rows:
+            continue
+        c2 = cell(r, ATS_COL_STYLE)
+        c3 = cell(r, ATS_COL_REF)
+        c4 = cell(r, ATS_COL_VARIANT)
+
+        # --- 尺码行 / 段落行(c2 有值, c3/c4 空) ---
+        if c2 and not c3 and not c4:
+            labels: List[Tuple[int, str]] = []
+            for c in range(ATS_COL_SIZE_START, ATS_COL_SIZE_END + 1):
+                sv = cell(r, c)
+                if sv:
+                    labels.append((c, sv))
+            if labels:
+                size_cols = labels
+                desc = c2                       # 款名 → 描述
+            else:
+                category = c2                   # 段落大类 → 类目
+            continue
+
+        # --- 颜色行(c3 + c4 都有值) ---
+        if not (c3 and c4):
+            continue
+
+        # 往后找材质行 / 产地行
+        # ⚠️ 材质格有时是**数字 0**(空值) —— 要跳过继续往下找, 不能当成材质,
+        #    也不能在那里停下(下一行才是产地行)
+        material = ""
+        origin = ""
+        for rr in range(r + 1, min(r + 4, ws.max_row) + 1):
+            if rr in header_rows:
+                break
+            if cell(rr, ATS_COL_VARIANT):
+                break                    # 下一行是颜色行 → 停
+            if cell(rr, ATS_COL_STYLE):
+                break                    # 下一行是尺码行/段落行 → 停
+            raw = ws.cell(rr, ATS_COL_REF).value
+            if raw is None or isinstance(raw, (int, float)):
+                continue                 # 空的材质格 → 跳过, 继续找产地行
+            v = str(raw).strip()
+            if not v:
+                continue
+            if v.upper().startswith("ORIGIN:"):
+                origin = v.split(":", 1)[1].strip()
+                break
+            if not material:
+                material = v
+
+        color_code, color_name = _split_ats_color(c4)
+        sku = f"{c3}-{color_code}" if color_code else f"{c3}-{color_name}"
+
+        base_row: Dict[str, object] = {
+            "brand": "A.P.C.",
+            "sku": sku,
+            "image": "",
+            "description": desc,
+            "category": category,
+            "material": material,
+            "color": color_name,
+            "color_code": color_code,
+            "gender": gender,
+            "season": season,
+            "origin": origin,
+            "cost": to_float(ws.cell(r, ATS_COL_COST).value),
+            "cplus_text": "",
+            "supply_price": None,
+            "retail_price": to_float(ws.cell(r, ATS_COL_SRP).value),
+            "vendor_id": vendor_id,
+            "image_items": images_by_row.get(r - 1, []),
+            "source_row_height": None,
+        }
+
+        if not size_cols:
+            # 没有尺码行 → 一行, 尺码留空(别把产品丢了)
+            rows.append({**base_row, "size": "", "quantity": None})
+            continue
+
+        for c, label in size_cols:
+            qty_v = ws.cell(r, c).value
+            qty = to_float(qty_v) if qty_v is not None else None
+            rows.append({
+                **base_row,
+                "size": label,
+                # 补货单: 源里数量格是空的 → 留空让客户填; 源里有正数才填
+                "quantity": int(round(qty)) if (qty is not None and qty > 0) else None,
+            })
+
+    return rows
+
+
 def parse_rows(primary_file: Path, _: Optional[Path], vendor_id: str) -> List[Dict[str, object]]:
     rows: List[Dict[str, object]] = []
 
@@ -704,6 +918,12 @@ def parse_rows(primary_file: Path, _: Optional[Path], vendor_id: str) -> List[Di
     if not wb.worksheets:
         return rows
     ws = wb.worksheets[0]
+
+    # 2026-11-06 新增: APC ATS REORDER(补货单) —— 表头含 REFERENZA + VARIANT
+    # ⚠️ 必须排在下面几个 detect 之前 —— 那几个都看 R1/R2 的固定 cell,
+    #    APC 的表头在 R16, 但默认的 PRADA 路径会把 R16 当数据行 → 出一堆垃圾行
+    if _looks_like_ats_reorder(ws):
+        return _parse_ats_reorder(ws, vendor_id)
 
     # 2026-09-08 'Ready to be shipped' sub-format detect:R2 c24 是 size code 多段 (\n 分)
     # 例 'XD\nAIU\nAID\nUNI\nCU\nSID\nSIU\nXU'
