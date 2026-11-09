@@ -190,7 +190,7 @@ template-resource-converter/
 | `V1011` | `vendor_v1011.py` | MAX MARA 意大利供应商 CATALOGO sheet |
 | `V1012` | `vendor_v1012.py` | |
 | `V1015` | `vendor_v1015.py` | 意大利线多版式: APC ATS REORDER(补货单) / Ready-to-ship / BOS-MONCLER / 怀远 / PRADA ITALY |
-| `V1015-补货单` | `vendor_v1015_restock.py` | richValue 路径,意大利大公司 SharePoint 风格 |
+| `V1015-补货单` | `vendor_v1015_restock.py` | ATS 系 STOCKLIST(richValue 嵌入单元格图),按表头名定位列,多个列序变式 |
 | `V1015-补货单2` | `vendor_v1015_restock2.py` | MIUMIU ATS,3 sheet 多品类 |
 | `V1015-补货单3` | `vendor_v1015_restock3.py` | GIORGIO ARMANI C-20,4 sheet 横排尺码 |
 | `V1015-补货单4` | `vendor_v1015_restock4.py` | EA7 C-20,1 sheet 纵排 17 列 |

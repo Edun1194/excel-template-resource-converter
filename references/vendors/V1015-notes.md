@@ -112,6 +112,80 @@
 
 ---
 
+## V1015-补货单(`vendor_v1015_restock.py`)—— ATS 系 STOCKLIST
+
+2026-11-09 改造: 老代码**写死列位**(11 列版式), 换成**按表头名定位**后两个版式都能吃。
+
+### ATS 的表有多个列序变体
+
+| 列 | 老版式(PRADA 11 列) | 新版式(VW STOCKLIST 15 列) |
+|---|---|---|
+| 1 | Prod Creation Season | Group |
+| 2 | Immagine | Product Department |
+| 3 | — | Prod Class |
+| 4 | Material Code | Generic Prod Code |
+| 5 | — | Material Code |
+| 6 | Style Des | Product Image |
+| 7 | — | Style Code |
+| 8 | Prod Fabric Des | Style Des |
+| 9 | Colour Des | Product Collection |
+| 10 | — | Prod Fabric Des |
+| 11 | Prod Size | Colour Des |
+| 12 | Available Qty | Colour Code |
+| 13 | WHL | Prod Size |
+| 14 | — | Available Qty |
+| 15 | — | WHL |
+
+仓库里还有 14 列(SCARVES)和 16 列(VW_ATS)两个变体 —— **一律按表头名定位**, 别写死列号。
+
+### 关键坑
+
+1. **图片是「嵌入单元格」图(richValue)**: 文件里没有 drawing part,
+   `ws._images` 读不到 → 必须走 richValue 链。
+   ⚠️ **图片列要按表头名定位**(`Product Image`): 老函数 `load_richvalue_images`
+   **写死 E 列**, 新版式的图在 **F 列** → 用老函数会读出 **0 张图**。
+   用 `load_richvalue_images_by_col(path, 列字母)` ✓
+2. **产地**: 源文件都没有产地列。老 PRADA 版式(没有 `Product Department` 列)
+   沿用原来的固定值 `ITALY`; ATS 新版式(有 `Product Department`)→ **留空**
+   (源里没产地信息, 不凭空造)。
+3. **性别**: `Product Department` = 'WOM-Woman' / 'MAN-Man' / 'UNI-Unisex'
+   → 取 '-' 后面的那段映射成 Woman / Man / Unisex。
+4. **品牌**: `Product Collection` 列(VW 文件里是 'Vivienne Westwood')。
+   ⚠️ 别用 `Prod Brand` —— 那是内部码(如 'IA IT ACCESSORIES'), 不是品牌名。
+5. **类目**: `Prod Class` = 'GAR-Ready to Wear' / 'OTA-Other Accessories' 等,
+   **原样保留**(带 3 字母前缀), 跟 category-futures 的 vw.py 口径一致。
+6. **季节**: 只有老/16 列版式有 `Prod Selling Season`; 新版式**没有季节列** → 留空
+   (让用户在 App 的「季节」框填)。
+
+### 字段映射(按表头名)
+
+| 模板列 | 源表头 |
+|---|---|
+| 品牌 | Product Collection |
+| 货号 | Material Code (完整 SKU, 如 '1803008O-C00AF-003') |
+| 描述 | Style Des |
+| 类目 | Prod Class |
+| 材质 | Prod Fabric Des |
+| 性别 | Product Department |
+| 颜色 | Colour Des |
+| 色号 | Colour Code |
+| 季节 | Prod Selling Season(没有就留空) |
+| 产地 | 源无产地列 → 留空(老 PRADA 版式沿用 'ITALY') |
+| 零售价 | 源没有 → 留空 |
+| cost | WHL |
+| 尺码 | Prod Size |
+| 数量 | Available Qty |
+| 云仓 | 固定 V1015 |
+
+### 实测(STOCKLIST+VW+07.11.xlsx)
+
+735 行 / 735 货号 / 数量合计 3195 / 615 行带图(源 120 行本来就没图)。
+校验: 从源独立重算 → 缺失 0 / 多出 0 / 字段不符 0; 图字节 100% 来自源;
+行↔图绑定 615/615 一致。
+老版式回归: 用合成的 11 列文件对比老代码 → 实质字段全部一致。
+
+---
+
 ## 相关文件
 
 - `scripts/vendor_v1015.py` — 主适配器(含 APC ATS REORDER 子版式)

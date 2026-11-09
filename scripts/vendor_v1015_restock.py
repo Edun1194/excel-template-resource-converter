@@ -1,38 +1,55 @@
-"""V1015R PRADA ITALY 补货单 vendor adapter (2026-07-29 新建)
+"""V1015R V1015 补货单 vendor adapter (2026-07-29 新建, 2026-11-09 改成按表头定位)
 
-适配文件:Prada 意大利线的 *补货单* (Stocklist Restock)。
+适配文件:V1015 工厂的**补货单 / STOCKLIST**(ATS 系意大利代理发的表)。
 
-⚠️ 当前实现基于 ATS VW (Vivienne Westwood) 的 SharePoint 同步模式 (richValue):
-- 源文件从 Microsoft 365 / SharePoint 同步,带 `xl/richData/` 目录
-- E 列 cell 有 `vm` 属性,通过 richValue 链拿到 Excel 实际显示的图
-- 走 *per-row* 模式:每行用自己的图(不按 SKU 前缀共享)
+⚠️ ATS 的表有两种列序(列数不同), 老代码写死列位 → 换个版式就全读错:
+  - 老版式(PRADA 11 列):c1=Prod Creation Season, c4=Material Code, c6=Style Des,
+    c8=Prod Fabric Des, c9=Colour Des, c11=Prod Size, c12=Available Qty, c13=WHL
+  - 新版式(2026-11-09 VW STOCKLIST 15 列):c1=Group, c2=Product Department,
+    c3=Prod Class, c4=Generic Prod Code, c5=Material Code, c6=Product Image,
+    c7=Style Code, c8=Style Des, c9=Product Collection, c10=Prod Fabric Des,
+    c11=Colour Des, c12=Colour Code, c13=Prod Size, c14=Available Qty, c15=WHL
 
-字段映射(参考 ATS VW V1015 现货单,1-idx 列):
-  货号 (SKU)   ← c4  Material Code (完整 SKU,c3 + 色码后缀)
-  描述         ← c6  Style Des
-  颜色         ← c9  Colour Des
-  季节         ← c1  Prod Creation Season
-  材质         ← c8  Prod Fabric Des
-  尺码         ← c11 Prod Size
-  库存         ← c12 Available Qty
-  cost         ← c13 WHL (warehouse price,作 cost)
-  图片         ← richValue (Excel 实际显示,小 png 84x112)
-  品牌         ←  ""  留空(让 main 走文件名兜底;V1015 是多品牌工厂代码)
-  仓库ID       ←  ""  留空
+→ 现在**一律按表头名定位列**(仓库铁律), 两个版式都能吃。
 
-参考:references/patterns/image-handling.md §15 (richValue 机制)
+图片:ATS 的图是 **Excel「嵌入单元格」图片(richValue)** —— 文件里没有 drawing part,
+  openpyxl 的 ws._images 读不到, 必须走 richValue 链:
+    cell.vm=N → rdrichvalue.xml → richValueRel.xml → xl/media/imageN.png
+  ⚠️ 图片列**按表头名定位**(Product Image), 写死列号会读错
+  (老函数 load_richvalue_images 写死 E 列, 新版式的图在 F 列 → 读出 0 张)。
+  参考:references/patterns/image-handling.md §15 (richValue 机制)
+
+字段映射(按表头名, 1-idx):
+  货号 (SKU)   ← Material Code        (完整 SKU, 如 '1803008O-C00AF-003')
+  描述         ← Style Des
+  颜色         ← Colour Des
+  色号         ← Colour Code
+  材质         ← Prod Fabric Des
+  尺码         ← Prod Size
+  库存         ← Available Qty
+  cost         ← WHL (warehouse price, 作 cost)
+  性别         ← Product Department   ('WOM-Woman' / 'MAN-Man' / 'UNI-Unisex')
+  类目         ← Prod Class           ('GAR-Ready to Wear' 等, 原样)
+  品牌         ← Product Collection   (VW 文件里是 'Vivienne Westwood')
+  季节         ← Prod Selling Season  (新版式没有这列 → 留空)
+  产地         ← 源没有产地列; 老 PRADA 版式沿用原来的 'ITALY'
+  图片         ← richValue(按 Product Image 列)
+  仓库ID       ← 固定 "V1015"(工厂代码, 补货单只是子类型)
 """
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Dict, List, Optional
 
 import openpyxl
+from openpyxl.utils import get_column_letter
 
 from convert_vendor_quote_shared import (
     has_richvalue_images,
     load_richvalue_images,
+    load_richvalue_images_by_col,
     normalize_text,
     to_float,
 )
@@ -44,21 +61,84 @@ VENDOR_ID = "V1015"
 
 
 def get_vendor_meta() -> Dict[str, object]:
-    """V1015R PRADA ITALY 补货单 vendor 元数据。"""
+    """V1015R 补货单 vendor 元数据。"""
     return {
         "default_image_col_width": 40.0,
     }
 
 
-# 0-indexed 关键列位置(基于 ATS VW V1015 现货单版式,1-idx - 1)
-COL_SKU = 3         # c4 Material Code (完整 SKU)
-COL_DESC = 5        # c6 Style Des
-COL_MATERIAL = 7    # c8 Prod Fabric Des
-COL_COLOR = 8       # c9 Colour Des
-COL_SIZE = 10       # c11 Prod Size
-COL_QTY = 11        # c12 Available Qty
-COL_COST = 12       # c13 WHL
-COL_SEASON = 0      # c1 Prod Creation Season
+# 字段 → 表头别名(归一化后精确匹配)。老/新两个版式都覆盖。
+ALIASES: Dict[str, tuple] = {
+    "sku":        ("Material Code",),
+    "desc":       ("Style Des", "Style Description"),
+    "material":   ("Prod Fabric Des", "Prod Fabric Description"),
+    "color":      ("Colour Des", "Colour Des", "Color Des", "Colour Description"),
+    "color_code": ("Colour Code", "Color Code"),
+    "size":       ("Prod Size",),
+    "qty":        ("Available Qty",),
+    "cost":       ("WHL",),
+    "season":     ("Prod Selling Season", "Prod Creation Season"),
+    "gender":     ("Product Department",),
+    "category":   ("Prod Class",),
+    "brand":      ("Product Collection",),
+    "image":      ("Product Image",),
+}
+
+
+def _norm_header(value: object) -> str:
+    """表头归一化: 小写 + 去掉非字母数字(空格/下划线/换行/€ 之类全去掉)。"""
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
+
+
+def _find_header_row(ws) -> Optional[int]:
+    """找表头行 —— 含 'Material Code' 或 'Prod Size' 这类可识别表头的行。"""
+    limit = min(ws.max_row, 6)
+    for r in range(1, limit + 1):
+        keys = {
+            _norm_header(ws.cell(r, c).value)
+            for c in range(1, min(ws.max_column, 30) + 1)
+        }
+        if "materialcode" in keys or "prodsize" in keys:
+            return r
+    return None
+
+
+def _header_cols(ws, header_row: int) -> Dict[str, int]:
+    """{归一化表头名: 列号}; 同名取最左边。"""
+    out: Dict[str, int] = {}
+    for c in range(1, ws.max_column + 1):
+        k = _norm_header(ws.cell(header_row, c).value)
+        if k and k not in out:
+            out[k] = c
+    return out
+
+
+def _pick(cols: Dict[str, int], names: tuple) -> Optional[int]:
+    """按别名取列号(第一个命中的)。"""
+    for n in names:
+        c = cols.get(_norm_header(n))
+        if c:
+            return c
+    return None
+
+
+def _parse_department(value: object) -> str:
+    """'WOM-Woman' / 'MAN-Man' / 'UNI-Unisex' → Woman / Man / Unisex。"""
+    s = normalize_text(value)
+    if not s:
+        return ""
+    tail = s.split("-")[-1].strip().lower()
+    for kw in ("unisex", "woman", "man", "kids", "junior"):
+        if tail == kw:
+            return kw.capitalize() if kw != "unisex" else "Unisex"
+    u = s.upper()
+    if "UNISEX" in u:
+        return "Unisex"
+    if "WOMAN" in u or "DONNA" in u:
+        return "Woman"
+    if "MAN" in u or "UOMO" in u:
+        return "Man"
+    return ""
 
 
 def parse_rows(
@@ -75,51 +155,75 @@ def parse_rows(
     # 用模块级 VENDOR_ID 覆盖 vendor_id,保证仓库ID 列稳定是 "V1015"
     vendor_id = VENDOR_ID
 
-    # richValue 图(per-row,1-idx)
-    if has_richvalue_images(primary_file):
-        rich_imgs = load_richvalue_images(primary_file)
-    else:
-        rich_imgs = {}
-
     wb = openpyxl.load_workbook(primary_file, data_only=True)
-    for ws in wb.worksheets:
-        # 当前假定单 sheet
-        for r in range(2, ws.max_row + 1):  # 跳过 R1 header
-            sku = normalize_text(ws.cell(r, COL_SKU + 1).value)
-            desc = normalize_text(ws.cell(r, COL_DESC + 1).value)
-            mat = normalize_text(ws.cell(r, COL_MATERIAL + 1).value)
-            color = normalize_text(ws.cell(r, COL_COLOR + 1).value)
-            size = normalize_text(ws.cell(r, COL_SIZE + 1).value)
-            qty_v = ws.cell(r, COL_QTY + 1).value
-            season = normalize_text(ws.cell(r, COL_SEASON + 1).value)
-            cost_v = ws.cell(r, COL_COST + 1).value
+    try:
+        ws = wb.worksheets[0]
+        header_row = _find_header_row(ws)
+        if header_row is None:
+            return rows
+
+        cols = _header_cols(ws, header_row)
+        C: Dict[str, Optional[int]] = {
+            field: _pick(cols, names) for field, names in ALIASES.items()
+        }
+
+        # 图片:richValue 链(ATS 的图是嵌入单元格图, 没有 drawing part)
+        images_by_row: Dict[int, List[Dict]] = {}
+        if has_richvalue_images(primary_file):
+            img_col = C.get("image")
+            if img_col:
+                # ⚠️ 图片列按表头名定位(Product Image)—— 写死列号会读错
+                images_by_row = load_richvalue_images_by_col(
+                    primary_file, get_column_letter(img_col)
+                )
+            else:
+                # 老版式没有 Product Image 列 → 退回老函数(写死 E 列)
+                images_by_row = load_richvalue_images(primary_file)
+
+        # 产地: 源文件都没有产地列。
+        #   老 PRADA 版式(11 列, **没有 Product Department 列**)→ 沿用原来的固定值 'ITALY'
+        #   ATS 新版式(有 Product Department, 能认出是哪个品牌)→ 源里没产地信息 → 留空
+        default_origin = "" if C.get("gender") else "ITALY"
+
+        def cellv(r: int, field: str) -> object:
+            c = C.get(field)
+            return ws.cell(r, c).value if c else None
+
+        for r in range(header_row + 1, ws.max_row + 1):
+            sku = normalize_text(cellv(r, "sku"))
+            size = normalize_text(cellv(r, "size"))
             if not sku or not size:
                 continue
-            qty = to_float(qty_v)
+            qty = to_float(cellv(r, "qty"))
             if qty is None or qty <= 0:
                 continue
-            cost = to_float(cost_v)
-            # per-row 图(richValue 1-idx row → 直接 r)
-            img_items = rich_imgs.get(r, [])
+
+            brand = normalize_text(cellv(r, "brand"))
             rows.append({
-                "brand": "",  # 留空,让 main 走文件名兜底
+                "brand": brand,          # 源有品牌列就用源里的; 没有 → 留空走文件名兜底
                 "sku": sku,
                 "image": "",
-                "description": desc,
-                "category": "",
-                "material": mat,
-                "color": color,
-                "season": season,
-                "origin": "ITALY",
-                "cost": cost,
+                "description": normalize_text(cellv(r, "desc")),
+                "category": normalize_text(cellv(r, "category")),
+                "material": normalize_text(cellv(r, "material")),
+                "color": normalize_text(cellv(r, "color")),
+                "color_code": normalize_text(cellv(r, "color_code")),
+                "gender": _parse_department(cellv(r, "gender")),
+                "season": normalize_text(cellv(r, "season")),
+                "origin": default_origin,
+                "cost": to_float(cellv(r, "cost")),
                 "cplus_text": "",
                 "supply_price": None,
                 "retail_price": None,
                 "size": size,
                 "quantity": int(qty),
                 "vendor_id": vendor_id,
-                "image_items": img_items,
+                "image_items": images_by_row.get(r, []),
                 "source_row_height": None,
             })
-        break  # 只处理第一个 sheet
-    return rows
+        return rows
+    finally:
+        try:
+            wb.close()
+        except Exception:
+            pass
