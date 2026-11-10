@@ -41,13 +41,15 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import openpyxl
 from openpyxl.utils import get_column_letter
 
 from convert_vendor_quote_shared import (
+    guess_product_group,
     has_richvalue_images,
+    is_positive_qty,
     load_richvalue_images,
     load_richvalue_images_by_col,
     normalize_text,
@@ -122,6 +124,232 @@ def _pick(cols: Dict[str, int], names: tuple) -> Optional[int]:
     return None
 
 
+# ---------------------------------------------------------------------------
+# ORDER(订货单)块式版式 (2026-11-10 新增)
+# ---------------------------------------------------------------------------
+# 源: "ORDER ZEGNA SS27_Jeans and Rtw 091126.xlsx"
+# 老 V1015 / PRADA 式块状版式, 每个产品 10 行:
+#   R(N)   产品 header 行: c1=总件数, c3=类别 token(尺码类别), c8+ = 各尺码 qty
+#   R(N+2) c24 = SKU 编码
+#   R(N+3) c24 = 描述, c35 = 颜色
+#   R(N+5) c26='Acquisto'(成本标签) / c32='Vendita'(零售价标签)
+#   R(N+6) c26=cost / c32=零售价
+# 尺码标签行(文件顶部): c2 = 多段 token('AIU\nJU\nSKU\nXU'), c4-c27 = 尺码(也是多段)
+#   → 按产品类别的 token 选第几段(欧码 / 英码 / IT码 / 字母码)
+# 标题行: c1 = 'Uomo - ZEGNA'(性别 - 品牌)
+# 图片: 每个产品一张, 锚在 (from_row = 产品 header 行 - 1, to_row = 下一产品附近) 跨整块
+#
+# 尺码段工具复用 vendor_v1015(同一套 ATS 逻辑, 避免两处漂移)
+
+_ORDER_GENDER = {
+    "donna": "Woman", "uomo": "Man", "woman": "Woman", "man": "Man",
+    "unisex": "Unisex", "kids": "Kid", "junior": "Junior",
+}
+
+
+def _looks_like_order_block(ws) -> bool:
+    """ORDER/PRADA 式块状版式 —— 找 'Acquisto'(成本标签)/ 'Vendita'(零售价标签)。"""
+    limit = min(ws.max_row, 60)
+    for r in range(1, limit + 1):
+        for c in range(1, min(ws.max_column, 40) + 1):
+            v = ws.cell(r, c).value
+            if isinstance(v, str) and v.strip().lower() in ("acquisto", "vendita"):
+                return True
+    return False
+
+
+def _load_block_images(ws) -> List[Tuple[int, int, Dict[str, object]]]:
+    """块共享图 → [(from_row_1idx, to_row_1idx, {bytes, format})]。
+
+    ⚠️ ORDER 的图**跨整个产品块**(from = 产品 header 行 - 1, to = 下一产品附近),
+    只记 from 行会**错位一行** → 图对不上行(老 V1015 主适配器就栽在这)。
+    """
+    out: List[Tuple[int, int, Dict[str, object]]] = []
+    for img in ws._images:
+        a = getattr(img, "anchor", None)
+        if not (hasattr(a, "_from") and a._from is not None):
+            continue
+        try:
+            blob = img._data() if hasattr(img, "_data") else None
+        except Exception:
+            blob = None
+        if not blob:
+            continue
+        frm = a._from.row + 1
+        to = frm
+        if hasattr(a, "to") and a.to is not None:
+            try:
+                to = a.to.row + 1
+            except Exception:
+                to = frm
+        if to < frm:
+            to = frm
+        out.append((frm, to, {"bytes": blob, "format": img.format or "jpeg"}))
+    return out
+
+
+def _pick_block_image(
+    images: List[Tuple[int, int, Dict[str, object]]], row_1idx: int,
+) -> List[Dict[str, object]]:
+    """取覆盖这一行的图: 最后一个 from_row <= 该行的图, 且它的范围要盖住这一行。"""
+    best: Optional[Tuple[int, int, Dict[str, object]]] = None
+    for frm, to, item in images:
+        if frm <= row_1idx:
+            best = (frm, to, item)
+    if best and best[1] >= row_1idx:
+        return [best[2]]
+    return []
+
+
+def _order_title(df, hdr_row: int) -> Tuple[str, str]:
+    """向上找最近的性别标题行('Uomo - ZEGNA') → (品牌, 性别)。"""
+    for r in range(hdr_row - 1, -1, -1):
+        v = df.iat[r, 0] if df.shape[1] > 0 else None
+        if not isinstance(v, str):
+            continue
+        sv = v.strip()
+        if not sv:
+            continue
+        head = sv.split("-")[0].strip().lower()
+        gender = _ORDER_GENDER.get(head, "")
+        if not gender:
+            continue
+        brand = sv.split("-", 1)[1].strip() if "-" in sv else ""
+        return brand, gender
+    return "", ""
+
+
+def _order_season(primary_file: Path) -> str:
+    """从文件名取季节: 'ORDER ZEGNA SS27_Jeans and Rtw 091126' → 'SS27'。
+
+    ⚠️ 季节后面常跟下划线('SS27_Jeans') —— 用 \\b 会在"数字+下划线"之间失配
+       (两者都是单词字符, 没有边界), 所以用 (?![0-9]) 收尾。
+    """
+    stem = primary_file.stem.upper()
+    m = re.search(r"(?:^|[^0-9A-Z])(FW|SS)\s*(\d{2})(?![0-9])", stem)
+    return f"{m.group(1)}{m.group(2)}" if m else ""
+
+
+def _parse_order_block(
+    primary_file: Path, ws, vendor_id: str,
+) -> List[Dict[str, object]]:
+    """ORDER(订货单)块式版式 —— 老 V1015 / PRADA 那种每产品 10 行的版式。"""
+    import pandas as pd
+    # 尺码段解析复用主适配器(同一套 ATS 逻辑, 别写两份)
+    from vendor_v1015 import (
+        COLOR_COL,
+        COST_VAL_COL,
+        DESC_COL,
+        RETAIL_VAL_COL,
+        SKU_COL,
+        _build_size_labels,
+        _find_size_label_row,
+        _looks_like_size_token,
+        _pick_seg_idx,
+    )
+
+    rows: List[Dict[str, object]] = []
+    df = pd.read_excel(primary_file, sheet_name=ws.title, header=None)
+
+    size_row = _find_size_label_row(df)
+    if size_row is None:
+        return rows
+    size_row_c2 = df.iat[size_row, 1] if df.shape[1] > 1 else ""
+    if not isinstance(size_row_c2, str):
+        size_row_c2 = ""
+
+    images = _load_block_images(ws)
+    season = _order_season(primary_file)
+
+    # 找产品 header 行: c1 = 总件数(正整数), c3 = 类别 token, 且至少一个尺码列有量
+    header_rows: List[int] = []
+    all_labels = _build_size_labels(df, size_row)
+    for idx, row in df.iterrows():
+        total_qty = row.iloc[0] if len(row) > 0 else None
+        cat_raw = row.iloc[2] if len(row) > 2 else None
+        cat = (
+            cat_raw.split("\n")[0].strip()
+            if isinstance(cat_raw, str) and cat_raw.strip() else ""
+        )
+        if not (isinstance(total_qty, (int, float)) and total_qty > 0
+                and cat and _looks_like_size_token(cat)):
+            continue
+        if not any(
+            isinstance(row.iloc[c], (int, float)) and row.iloc[c] > 0
+            for c in all_labels.keys() if c < len(row)
+        ):
+            continue
+        header_rows.append(int(idx))
+
+    for hdr_row in header_rows:
+        hdr = df.iloc[hdr_row]
+        cat_raw = hdr.iloc[2] if len(hdr) > 2 else None
+        cat = (
+            cat_raw.split("\n")[0].strip()
+            if isinstance(cat_raw, str) and cat_raw.strip() else ""
+        )
+        # 按产品类别选尺码段(欧码 / 英码 / IT码 / 字母码)
+        seg_idx = _pick_seg_idx(cat, size_row_c2)
+        size_labels = _build_size_labels(df, size_row, seg_idx=seg_idx)
+        if not size_labels:
+            continue
+
+        sku_row = hdr_row + 2
+        if sku_row >= len(df):
+            continue
+        sku = normalize_text(df.iat[sku_row, SKU_COL]) if SKU_COL < df.shape[1] else ""
+        if not sku:
+            continue
+
+        desc_row = hdr_row + 3
+        if desc_row >= len(df):
+            continue
+        description = (normalize_text(df.iat[desc_row, DESC_COL])
+                       if DESC_COL < df.shape[1] else "")
+        color = (normalize_text(df.iat[desc_row, COLOR_COL])
+                 if COLOR_COL < df.shape[1] else "")
+
+        price_row = hdr_row + 6
+        cost = (to_float(df.iat[price_row, COST_VAL_COL])
+                if price_row < len(df) and COST_VAL_COL < df.shape[1] else None)
+        retail = (to_float(df.iat[price_row, RETAIL_VAL_COL])
+                  if price_row < len(df) and RETAIL_VAL_COL < df.shape[1] else None)
+
+        brand, gender = _order_title(df, hdr_row)
+        img_items = _pick_block_image(images, hdr_row + 1)
+
+        for col_idx, size_label in size_labels.items():
+            if col_idx >= len(hdr):
+                continue
+            qty_raw = hdr.iloc[col_idx]
+            if not is_positive_qty(qty_raw):
+                continue
+            qty = int(round(float(to_float(qty_raw) or 0)))
+            rows.append({
+                "brand": brand,
+                "sku": sku,
+                "image": "",
+                "description": description,
+                "category": guess_product_group(description) if description else "",
+                "material": "",
+                "color": color,
+                "color_code": "",
+                "gender": gender,
+                "season": season,
+                "origin": "ITALY",
+                "cost": cost,
+                "cplus_text": "",
+                "supply_price": None,
+                "retail_price": retail,
+                "size": size_label,
+                "quantity": qty,
+                "vendor_id": vendor_id,
+                "image_items": img_items,
+                "source_row_height": None,
+            })
+    return rows
+
+
 def _parse_department(value: object) -> str:
     """'WOM-Woman' / 'MAN-Man' / 'UNI-Unisex' → Woman / Man / Unisex。"""
     s = normalize_text(value)
@@ -158,6 +386,12 @@ def parse_rows(
     wb = openpyxl.load_workbook(primary_file, data_only=True)
     try:
         ws = wb.worksheets[0]
+
+        # 2026-11-10 新增: ORDER(订货单)块式版式(老 V1015 / PRADA 那种每产品 10 行)
+        # ⚠️ 要在 ATS STOCKLIST 的表头判定之前 —— 两边完全不同的版式
+        if _looks_like_order_block(ws):
+            return _parse_order_block(primary_file, ws, vendor_id)
+
         header_row = _find_header_row(ws)
         if header_row is None:
             return rows
